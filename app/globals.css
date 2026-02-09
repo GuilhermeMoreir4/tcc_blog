@@ -48,3 +48,12 @@ body {
   background-color: var(--color-moss);
   color: var(--color-ethereal);
 }
+
+@layer utilities {
+  .bg-grid-pattern {
+    background-size: 40px 40px;
+    background-image: 
+      linear-gradient(to right, #595f39 1px, transparent 1px),
+      linear-gradient(to bottom, #595f39 1px, transparent 1px);
+  }
+}
