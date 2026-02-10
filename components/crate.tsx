@@ -13,6 +13,7 @@ export default function CrateModel({ ...props }: ModelProps) {
       scale={props.scale}
       rotations={props.rotation}
       position={props.position}
+      
       children-0-castShadow
     />
   );
