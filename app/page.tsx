@@ -1,8 +1,9 @@
+import RoadMap from "@/components/roadMap";
 import { BookOpen, CodeXml } from "lucide-react";
 
 export default function Home() {
   return (
-    <div className="flex flex-col items-center justify-center gap-10 min-h-screen">
+    <div className="pt-10 flex flex-col items-center justify-center gap-10 min-h-screen">
       <div
         className="
     inline-flex items-center gap-3 
@@ -34,6 +35,7 @@ export default function Home() {
           <CodeXml color="#595f39" /> Sobre o projeto
         </a>
       </div>
+      <RoadMap />
     </div>
   );
 }
