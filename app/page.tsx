@@ -36,6 +36,12 @@ export default function Home() {
         </a>
       </div>
       <RoadMap />
+      <footer>
+        <section>
+          <p>Guigo ink</p>
+        </section>
+        <section>Abababa</section>
+      </footer>
     </div>
   );
 }

@@ -27,7 +27,7 @@ export function Model({
       <primitive
         object={gltf.scene}
         scale={props.scale}
-        rotations={props.rotation}
+        rotation={props.rotation}
         position={props.position}
         children-0-castShadow
       />

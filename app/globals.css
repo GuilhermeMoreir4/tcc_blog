@@ -1,11 +1,33 @@
 @import "tailwindcss";
+@plugin "@tailwindcss/typography";
+
+article.prose {
+  --tw-prose-body: var(--foreground);
+  --tw-prose-headings: var(--primary);
+  --tw-prose-lead: var(--foreground);
+  --tw-prose-links: var(--primary);
+  --tw-prose-bold: var(--foreground);
+  --tw-prose-counters: var(--primary);
+  --tw-prose-bullets: var(--primary);
+  --tw-prose-hr: var(--foreground);
+  --tw-prose-quotes: var(--foreground);
+  --tw-prose-quote-borders: var(--foreground);
+  --tw-prose-captions: var(--foreground);
+  --tw-prose-kbd: var(--foreground);
+  --tw-prose-code: var(--foreground);
+  --tw-prose-pre-code: var(--foreground);
+  --tw-prose-th-borders: var(--foreground);
+  --tw-prose-td-borders: var(--foreground);
+}
 
 :root {
   font-family: var(--font-sans);
   --background: #ffffff;
   --foreground: #171717;
+
   background-color: var(--color-eerie);
   color: var(--color-ethereal);
+  --primary: var(--color-blue-300);
 }
 @theme {
   --color-ethereal: #e4e4de; /* Texto principal / Destaques claros */
@@ -29,12 +51,15 @@
   --color-foreground: var(--foreground);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+  --color-primary: var(--primary);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
     --background: #0a0a0a;
     --foreground: #ededed;
+
+    --primary: var(--color-blue-300);
   }
 }
 
@@ -52,7 +77,7 @@ body {
 @layer utilities {
   .bg-grid-pattern {
     background-size: 40px 40px;
-    background-image: 
+    background-image:
       linear-gradient(to right, #595f39 1px, transparent 1px),
       linear-gradient(to bottom, #595f39 1px, transparent 1px);
   }
