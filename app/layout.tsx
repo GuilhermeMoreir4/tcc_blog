@@ -5,7 +5,7 @@ import { GeistSans } from "geist/font/sans";
 import { GeistMono } from "geist/font/mono";
 
 import "./globals.css";
-import Header from "./_components/header";
+import Header from "../components/header";
 import { GridBackground } from "@/components/gridPattern";
 
 const geistSans = Geist({
