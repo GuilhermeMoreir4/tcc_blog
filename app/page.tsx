@@ -1,3 +1,4 @@
+import EmualtorDisplay from "@/components/emulator";
 import RoadMap from "@/components/roadMap";
 import { BookOpen, CodeXml } from "lucide-react";
 
