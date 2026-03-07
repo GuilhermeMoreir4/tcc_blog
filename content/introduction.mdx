@@ -1,4 +1,10 @@
 import EmulatorDisplay from "@/components/emulator.tsx";
+import If from "@/components/conditional_component.tsx";
+import Testing from "@/components/testing.tsx";
+import { Button } from "@/components/ui/button";
+import { ArrowLeft, ArrowRight, ArrowUp } from "lucide-react";
+
+export let show_unix_tutorial = false;
 
 export const metadata = {
   title: "1. Conhecendo o parede de carne!",
@@ -21,11 +27,50 @@ Você pode esperar uma escrita bem descontraída, mas com um teor de rigor séri
 
 ## 1.1 - Bem vindo ao parede de carne e conhecendo seu editor de texto.
 
+### 1.1.1 O que é o parede de carne?
+
+> “The master and core of the world.”
+
+Como eu já disse anteriormente, tomei a liberdade de emular uma máquina virtual no meu website, aproveitando que os capítulos vão ser longos, ela sempre vai se encontrar
+no final de todo capítulo para que você possa colocar em prática os conceitos que for aprender no decorrer do livro. E o nome dela é parede de carne! Uma homenagem
+ao jogo <a href="https://terraria.wiki.gg/wiki/Wall_of_Flesh" target="_blank">terraria</a>, no jogo ele é o último boss antes do modo díficil, então como esse é um desáfio
+para quem quer iniciar no mundo dos sistemas operacionais, onde não existe almoço grátis, achei esse um bom nome e uma boa homenagem.
+
+Então, agora sem mais enroalação, responda:
+
+Você é familiarizado com sistema unix like?
+
+<If condition={show_unix_tutorial}>Bla bla bla</If>
+
+Já vou começar introduzindo um programa em Assembly bem básico, não se preocupe, assim como um açougueiro, ou o doutor Victor Frankstein se você gostar de literatura gótica, vamos dissecar parte por parte.
+
+O primeiro contato com esse programa é fundamental para você se familiarizar com o ambiente, ele será utilizado ao longo de todo o capítulo.
+
+Se você não está acostumado com sistemas Unix essa é a hora!
+
 ## 1.2 - O que são registradores?
 
 ## 1.3 - Variáveis?
 
 ## 1.4 - O que é uma interrupção?
+
+Primeiro quero que você reflita, como o meu computador sabe na minha linguagem de alto nível, por exemplo, o python que esse código aqui:
+
+```python
+print("Hello World!")
+```
+
+Vai produzir essa saída:
+
+```shell
+Hello World!
+```
+
+Ele não sabe, computadores não pensam e não tem conciência, e aqui vai uma das primeiras lições que você deve aprender sobre computadores, eles só fazem o que mandamos.
+Ok, ok, então como ele sabe que eu estou mandando ele imprimir isso na minha tela?
+Agora sim, boas perguntas começaram a aparecer! O python, sofre um processo de <a href="https://pt.wikipedia.org/wiki/Linguagem_interpretada" target="_blank">interpretação</a>,
+onde, um outro programa escrito em uma linguagem <a href='https://pt.wikipedia.org/wiki/Linguagem_compilada' target="_blank">compilada</a>,
+chamado interpretador vai interpreta-lo. O ponto é, mesmo o python precisa dizer para o sistema o que ele quer executar, do que adianta ele fazer todo trabalho sujo e não ter para quem mostrar?
 
 ## 1.5 - O que é um linker?
 
@@ -38,3 +83,20 @@ Você pode esperar uma escrita bem descontraída, mas com um teor de rigor séri
 ## 🧠 Quiz
 
 ## 🔬 Experimento opcional
+
+<footer className="flex justify-between">
+  <a
+    href=""
+    className="flex items-center gap-2 hover:cursor-pointer no-underline"
+  >
+    Sumário
+    <ArrowUp />
+  </a>
+  <a
+    href=""
+    className="flex items-center gap-2 hover:cursor-pointer no-underline"
+  >
+    Próximo capitulo
+    <ArrowRight />
+  </a>
+</footer>

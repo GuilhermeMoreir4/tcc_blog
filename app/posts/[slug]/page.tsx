@@ -72,11 +72,7 @@ export default async function Page({ params }: BlogProps) {
           <article className="prose max-w-none w-full pb-16">
             <MDXContent />
           </article>
-          <footer className="flex justify-between">
-            <Button className="hover:cursor-pointer">Capítulo anterior</Button>
-            <Button className="hover:cursor-pointer">Sumário</Button>
-            <Button className="hover:cursor-pointer">Próximo capitulo</Button>
-          </footer>
+          
         </div>
       </main>
     </div>
