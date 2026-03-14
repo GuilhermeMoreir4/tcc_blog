@@ -7,6 +7,7 @@ import { GeistMono } from "geist/font/mono";
 import "./globals.css";
 import Header from "../components/header";
 import { GridBackground } from "@/components/gridPattern";
+import VMWidget from "@/components/VMWidget";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -36,6 +37,7 @@ export default function RootLayout({
       <body className="antialiased">
         <Header />
         <GridBackground>{children}</GridBackground>
+        <VMWidget />
       </body>
     </html>
   );

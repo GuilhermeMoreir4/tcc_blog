@@ -29,60 +29,502 @@ Você pode esperar uma escrita bem descontraída, mas com um teor de rigor séri
 
 ### 1.1.1 O que é o parede de carne?
 
-> “The master and core of the world.”
+> "The master and core of the world."
 
-Como eu já disse anteriormente, tomei a liberdade de emular uma máquina virtual no meu website, aproveitando que os capítulos vão ser longos, ela sempre vai se encontrar
-no final de todo capítulo para que você possa colocar em prática os conceitos que for aprender no decorrer do livro. E o nome dela é parede de carne! Uma homenagem
-ao jogo <a href="https://terraria.wiki.gg/wiki/Wall_of_Flesh" target="_blank">terraria</a>, no jogo ele é o último boss antes do modo díficil, então como esse é um desáfio
-para quem quer iniciar no mundo dos sistemas operacionais, onde não existe almoço grátis, achei esse um bom nome e uma boa homenagem.
+Como eu já disse anteriormente, tomei a liberdade de emular uma máquina virtual no meu blog, aproveitando que os capítulos vão ser longos, ela sempre vai se encontrar
+no final de todo capítulo para que você possa colocar em prática os conceitos que for aprender ao decorrer do livro. E o nome dela é parede de carne! Uma homenagem
+ao jogo <a href="https://terraria.wiki.gg/wiki/Wall_of_Flesh" target="_blank">terraria</a>, no jogo ele é o último boss antes do modo díficil. Como esse é um desafio para quem quer iniciar no mundo dos sistemas operacionais — um lugar onde realmente não existe almoço grátis — achei esse um nome apropriado.
 
 Então, agora sem mais enroalação, responda:
 
-Você é familiarizado com sistema unix like?
+Você é familiarizado com sistemas unix like?
 
-<If condition={show_unix_tutorial}>Bla bla bla</If>
+<If condition={false}>
+Não, né? Então aqui vão suas primeiras instruções para utilizar a máquina: alguns comandos básicos que você pode usar para verificar se está tudo correto.
 
-Já vou começar introduzindo um programa em Assembly bem básico, não se preocupe, assim como um açougueiro, ou o doutor Victor Frankstein se você gostar de literatura gótica, vamos dissecar parte por parte.
+```shell
+ld --version
+```
 
-O primeiro contato com esse programa é fundamental para você se familiarizar com o ambiente, ele será utilizado ao longo de todo o capítulo.
+Esse simples comando vai mostrar a versão atual do linker do GNU, essa é uma das principais ferramentas que vamos utilizar durante todo o decorrer do curso!
 
-Se você não está acostumado com sistemas Unix essa é a hora!
+Agora aqui vai uma lista de comandos básicos do linux que vão ser importantes para você
+
+### Mostrar o diretório atual
+
+```shell
+pwd
+```
+
+### Listar arquivos e pastas do diretório
+
+```shell
+ls
+```
+
+### Listar arquivos com mais detalhes
+
+```shell
+ls -la
+```
+
+### Criar uma nova pasta
+
+```shell
+mkdir meu_projeto
+```
+
+### Entrar em uma pasta
+
+```shell
+cd meu_projeto
+```
+
+### Criar um arquivo vazio
+
+```shell
+touch arquivo.asm
+```
+
+### Mostrar o conteúdo de um arquivo
+
+```shell
+cat arquivo.asm
+```
+
+### Abrir um arquivo em um editor simples no terminal
+
+Vamos manipular bastantes arquivos durante a nossa jornada, para isso, você tem um editor de texto de terminal a sua disposição, basta utilizar o comando:
+
+```shell
+micro arquivo.asm
+```
+
+### Limpar o terminal
+
+```shell
+clear
+```
+
+</If>
+
+---
 
 ## 1.2 - O que são registradores?
 
+Imagine que você está montando um hambúrguer numa cozinha industrial. Você tem dois lugares para trabalhar: a bancada na sua frente — pequena, mas absurdamente rápida de acessar — e uma despensa enorme no fundo da cozinha, que tem tudo, mas você precisa andar até lá toda vez que precisa de algo.
+
+No processador, **registradores são essa bancada**. São pequenas células de memória que ficam _dentro_ do próprio processador. O acesso a eles é tão rápido que é praticamente instantâneo — sem latência, sem barramento de memória, sem conversa. A despensa, nessa analogia, é a RAM.
+
+No x86 de 16-bit (que é onde vamos viver por um bom tempo nesse curso), você tem um conjunto de registradores de propósito geral bastante familiar para quem já leu alguma coisa de Assembly. Vamos conhecê-los:
+
+### Os registradores de propósito geral
+
+| Registrador | Nome completo | Uso convencional                           |
+| ----------- | ------------- | ------------------------------------------ |
+| `AX`        | Accumulator   | Operações aritméticas e retorno de valores |
+| `BX`        | Base          | Endereçamento de memória                   |
+| `CX`        | Counter       | Contadores em loops                        |
+| `DX`        | Data          | Operações de I/O e multiplicação/divisão   |
+
+Cada um desses registradores tem **16 bits** no modo real (o modo que o processador inicia quando você liga o computador — mais sobre isso em breve). Mas tem um detalhe curioso: você pode acessar a metade de cada um deles separadamente.
+
+Veja o `AX` por exemplo:
+
+```
+AX  (16 bits)
+├── AH — parte alta (bits 8 a 15)
+└── AL — parte baixa (bits 0 a 7)
+```
+
+Isso significa que `AX = (AH << 8) | AL`. Parece detalhe agora, mas vai ser extremamente útil quando formos trabalhar com interrupções da BIOS, que recebem parâmetros exatamente assim.
+
+### Os registradores de segmento
+
+Aqui começa a ficar interessante — e um pouco estranho se você vem de linguagens de alto nível. No x86 de 16-bit, a memória é organizada em **segmentos**. Pensa assim: em vez de um único espaço de endereçamento contínuo, você tem vários "quadrantes" de 64KB cada, e registradores especiais que apontam para o início de cada um deles.
+
+| Registrador | Nome          | Função                           |
+| ----------- | ------------- | -------------------------------- |
+| `CS`        | Code Segment  | Aponta para o segmento de código |
+| `DS`        | Data Segment  | Aponta para o segmento de dados  |
+| `SS`        | Stack Segment | Aponta para o segmento de pilha  |
+| `ES`        | Extra Segment | Segmento extra para operações    |
+
+O endereço real de qualquer dado é calculado assim:
+
+```
+Endereço físico = (Segmento × 16) + Offset
+```
+
+Por exemplo: se `DS = 0x1000` e você tenta acessar o offset `0x0050`, o endereço físico que o processador vai usar é `0x10050`. Essa aritmética de segmentos é uma das marcas registradas (e fontes de confusão) do x86 16-bit.
+
+### Os registradores de índice e ponteiro
+
+| Registrador | Nome                | Uso principal                             |
+| ----------- | ------------------- | ----------------------------------------- |
+| `SI`        | Source Index        | Índice de origem em operações com strings |
+| `DI`        | Destination Index   | Índice de destino                         |
+| `SP`        | Stack Pointer       | Aponta para o topo da pilha               |
+| `BP`        | Base Pointer        | Base do stack frame atual                 |
+| `IP`        | Instruction Pointer | Aponta para a próxima instrução           |
+
+O `IP` é especial: **você nunca o modifica diretamente**. Ele é controlado pelo processador conforme as instruções são executadas, e por instruções de salto como `JMP`, `CALL` e `RET`.
+
+> 💡 **Para fixar:** Os registradores são a memória mais rápida que existe no sistema. Quando você escrever Assembly, vai perceber que boa parte do trabalho é gerenciar _quem_ está guardando _o quê_ nesses registradores em cada momento. É quase como um jogo de xadrez — você precisa pensar alguns passos à frente.
+
+---
+
 ## 1.3 - Variáveis?
+
+Se você chegou aqui vindo de Python, JavaScript ou qualquer linguagem de alto nível, provavelmente está esperando fazer algo como:
+
+```python
+meu_numero = 42
+```
+
+Tenho uma notícia levemente perturbadora: **isso não existe em Assembly**. Pelo menos não da forma que você está acostumado.
+
+Em Assembly, o que chamamos de "variável" é, na verdade, um **rótulo (label) que aponta para uma posição de memória**. Você está literalmente dizendo ao assembler: "nesse endereço aqui, guarda esse valor". Sem tipo, sem nome bonito, sem garbage collector. Você e a memória, frente a frente.
+
+### Definindo dados no segmento de dados
+
+No Assembly x86 (sintaxe NASM, que é o que vamos usar), dados são declarados na seção `.data`:
+
+```asm
+section .data
+    meu_numero  dw  42        ; "define word" — 2 bytes, valor 42
+    mensagem    db  'Oi!', 0  ; "define byte" — sequência de bytes, terminada em 0
+    valor_zero  dw  0         ; inicializado com zero
+```
+
+As diretivas de definição mais comuns são:
+
+| Diretiva | Tamanho | Exemplo         |
+| -------- | ------- | --------------- |
+| `db`     | 1 byte  | `db 0xFF`       |
+| `dw`     | 2 bytes | `dw 1234`       |
+| `dd`     | 4 bytes | `dd 0xDEADBEEF` |
+
+### E se eu quiser reservar espaço sem inicializar?
+
+Para isso existe a seção `.bss`, onde você _reserva_ memória sem definir um valor inicial:
+
+```asm
+section .bss
+    buffer  resb  64   ; reserva 64 bytes
+    contador resw  1   ; reserva espaço para 1 word (2 bytes)
+```
+
+### Usando os dados
+
+Para acessar o conteúdo de uma variável, você usa colchetes:
+
+```asm
+section .data
+    valor  dw  7
+
+section .text
+    mov ax, [valor]   ; carrega o conteúdo de 'valor' em AX
+    mov bx, valor     ; carrega o ENDEREÇO de 'valor' em BX (sem colchetes!)
+```
+
+Esse é um dos pontos que mais confunde quem está começando: **com colchetes você acessa o conteúdo, sem colchetes você acessa o endereço**. É a diferença entre pegar o que está dentro de uma caixa e pegar a caixa inteira.
+
+> ⚠️ **Atenção:** No contexto de um bootloader, você vai trabalhar _sem_ sistema operacional gerenciando a memória por você. Isso significa que se você escrever no lugar errado, pode corromper seu próprio código. Literalmente. Sem segfault, sem aviso. Apenas o caos silencioso do comportamento indefinido.
+
+---
 
 ## 1.4 - O que é uma interrupção?
 
-Primeiro quero que você reflita, como o meu computador sabe na minha linguagem de alto nível, por exemplo, o python que esse código aqui:
+Aqui é onde as coisas começam a ficar realmente divertidas.
 
-```python
-print("Hello World!")
+Imagine que você está dormindo (seu processador executando as instruções tranquilamente) e de repente alguém bate na sua porta (o teclado foi pressionado, o disco terminou uma leitura, o timer disparou). Você precisa parar o que está fazendo, atender quem bateu, e depois voltar exatamente de onde parou. Essa é a ideia de uma **interrupção**.
+
+### Interrupções de hardware vs. software
+
+Existem dois sabores de interrupção que você vai encontrar no nosso contexto:
+
+**Interrupções de hardware** são geradas por dispositivos externos — o teclado, o timer do sistema, o disco. O hardware literalmente interrompe o processador através de um pino elétrico chamado IRQ (Interrupt Request).
+
+**Interrupções de software** são geradas _pelo próprio código_, intencionalmente, usando a instrução `INT`. É assim que, no modo real do x86, você conversa com a **BIOS** — o firmware que vive na placa-mãe e oferece serviços básicos de I/O.
+
+```asm
+mov ah, 0x0E   ; função "teletype output" da BIOS
+mov al, 'A'    ; caractere a imprimir
+int 0x10       ; interrupção da BIOS para serviços de vídeo
 ```
 
-Vai produzir essa saída:
+Esse trecho acima imprime a letra 'A' na tela. Simples assim. Você preenche os registradores com os parâmetros que a BIOS espera e dispara a interrupção.
 
-```shell
-Hello World!
+### A tabela de vetores de interrupção
+
+Quando uma interrupção é disparada, o processador precisa saber _o que fazer_. Ele consulta uma estrutura chamada **IVT (Interrupt Vector Table)**, que fica nos primeiros 1024 bytes da RAM (endereços `0x0000` a `0x03FF`). Cada entrada na IVT tem 4 bytes e contém o endereço do **handler** — a rotina que vai tratar aquela interrupção.
+
+```
+Endereço 0x0000: vetor da INT 0  (divisão por zero)
+Endereço 0x0004: vetor da INT 1  (debug)
+Endereço 0x0008: vetor da INT 2  (NMI)
+...
+Endereço 0x0040: vetor da INT 16 (0x10 — serviços de vídeo da BIOS)
+...
 ```
 
-Ele não sabe, computadores não pensam e não tem conciência, e aqui vai uma das primeiras lições que você deve aprender sobre computadores, eles só fazem o que mandamos.
-Ok, ok, então como ele sabe que eu estou mandando ele imprimir isso na minha tela?
-Agora sim, boas perguntas começaram a aparecer! O python, sofre um processo de <a href="https://pt.wikipedia.org/wiki/Linguagem_interpretada" target="_blank">interpretação</a>,
-onde, um outro programa escrito em uma linguagem <a href='https://pt.wikipedia.org/wiki/Linguagem_compilada' target="_blank">compilada</a>,
-chamado interpretador vai interpreta-lo. O ponto é, mesmo o python precisa dizer para o sistema o que ele quer executar, do que adianta ele fazer todo trabalho sujo e não ter para quem mostrar?
+No nosso bootloader, vamos usar bastante as interrupções da BIOS para imprimir texto, ler o teclado e carregar setores do disco. Tudo isso antes de existir qualquer sistema operacional — é literalmente a camada mais baixa de software que existe.
+
+> 🤯 **Curiosidade:** Quando você escreve `printf("hello")` em C, por baixo dos panos, numa cadeia de chamadas, eventualmente chega em uma syscall do kernel Linux, que por sua vez pode ter chegado aqui — em código de modo real conversando com hardware através de interrupções. Você está aprendendo de onde tudo veio.
+
+---
 
 ## 1.5 - O que é um linker?
 
+Você escreveu seu código Assembly. O assembler (no nosso caso, o **NASM**) pegou esse código e gerou um arquivo objeto — um arquivo cheio de bytes que representa suas instruções e dados. Mas esse arquivo ainda não está pronto para executar. Por quê?
+
+Porque ele pode ter **referências que ainda não foram resolvidas**.
+
+Pensa num livro com notas de rodapé. O texto menciona "veja nota 7", mas enquanto o livro não estiver finalizado, a nota 7 pode estar numa página diferente toda vez que você reimprime. O linker é o editor que finaliza o livro e garante que "veja nota 7" aponta para a página certa.
+
+### O trabalho do linker
+
+O `ld` (linker do GNU, que você já tem disponível no parede de carne) faz basicamente três coisas:
+
+1. **Combina** múltiplos arquivos objeto em um único executável
+2. **Resolve símbolos** — substitui referências a labels pelo endereço real delas
+3. **Define o layout** de memória — onde o código vai morar, onde os dados vão estar
+
+### Por que isso importa para o bootloader?
+
+No contexto de um bootloader, o linker tem um papel ainda mais crítico. A BIOS carrega o bootloader **sempre no endereço `0x7C00`**. Se o seu código assumir que está em outro lugar, as referências de memória vão estar todas erradas e tudo vai quebrar de maneiras criativas e desoladoras.
+
+Por isso, precisamos dizer ao linker exatamente onde nosso código vai estar:
+
+```shell
+ld -Ttext 0x7C00 -o bootloader.bin bootloader.o --oformat binary
+```
+
+Vamos dissecar esse comando:
+
+- `-Ttext 0x7C00` — define que a seção `.text` começa no endereço `0x7C00`
+- `-o bootloader.bin` — nome do arquivo de saída
+- `bootloader.o` — arquivo objeto de entrada (gerado pelo NASM)
+- `--oformat binary` — gera um binário puro, sem cabeçalhos ELF ou qualquer outro formato. Apenas os bytes do nosso programa.
+
+> 💡 **Por que `0x7C00`?** É uma herança histórica do IBM PC original de 1981. O DOS precisava de pelo menos 32KB de RAM e queria o bootloader no final desse espaço, mas com margem para a pilha. O cálculo resultou em `0x7C00` e ficou pra sempre.
+
+---
+
 ## 1.6 - Assemblando!
+
+Chegou a hora. Vamos juntar tudo que aprendemos e escrever nosso primeiro programa Assembly que vai rodar no parede de carne.
+
+Mas antes de escrever um bootloader de verdade, vamos fazer algo mais simples: um programa que usa a interrupção da BIOS para imprimir uma mensagem na tela. Isso vai nos permitir verificar que tudo está funcionando antes de mergulharmos na complexidade do bootloader.
+
+### O fluxo completo
+
+```
+código .asm  →  [NASM]  →  arquivo .o  →  [ld]  →  binário executável
+```
+
+### Passo a passo
+
+**1. Crie o arquivo:**
+
+```shell
+mkdir ~/primeiro_programa
+cd ~/primeiro_programa
+micro ola.asm
+```
+
+**2. Digite o código:**
+
+```asm
+; ola.asm — Nosso primeiro programa Assembly!
+; Imprime "Ola!" usando a BIOS e para o processador.
+
+[BITS 16]           ; estamos em modo real de 16 bits
+[ORG 0x7C00]        ; diz ao assembler que começamos em 0x7C00
+
+start:
+    mov si, mensagem    ; SI aponta para o início da nossa string
+    call imprimir       ; chamamos a rotina de impressão
+
+    cli                 ; desabilita interrupções
+    hlt                 ; para o processador
+
+imprimir:
+    lodsb               ; carrega o byte apontado por SI em AL, e avança SI
+    or al, al           ; verifica se AL é zero (fim da string)
+    jz .fim             ; se for, pula para .fim
+    mov ah, 0x0E        ; função de teletype da BIOS
+    int 0x10            ; chama a BIOS
+    jmp imprimir        ; repete para o próximo caractere
+.fim:
+    ret
+
+mensagem db 'Ola!', 13, 10, 0   ; nossa string, com enter (\r\n) e terminador nulo
+
+; Padding e assinatura do bootloader
+times 510 - ($ - $$) db 0   ; preenche com zeros até o byte 510
+dw 0xAA55                   ; assinatura mágica — a BIOS procura por isso!
+```
+
+**3. Monte com o NASM:**
+
+```shell
+nasm -f bin ola.asm -o ola.bin
+```
+
+Note que usamos `-f bin` diretamente no NASM desta vez — para programas simples assim, podemos pedir ao NASM para gerar o binário diretamente, sem precisar do linker. Quando formos trabalhar com múltiplos arquivos, o linker entra em ação.
+
+**4. Verifique o tamanho:**
+
+```shell
+ls -la ola.bin
+```
+
+Se tudo correu bem, o arquivo deve ter exatamente **512 bytes** — o tamanho exato de um setor de disco, que é o que a BIOS espera carregar.
+
+> 🎉 **Parabéns!** Você acabou de escrever código que poderia, se gravado num pendrive, ser a primeira coisa que um computador real executa ao ligar. Sem sistema operacional, sem runtime, sem abstração. Só você e o ferro.
 
 ---
 
 ## 🧪 Exercícios
 
+### Exercício 1 — Reconhecendo registradores
+
+Analise o trecho de código abaixo e responda: quais registradores estão sendo usados, e qual o valor final de `AX` ao final da execução?
+
+```asm
+mov ax, 0x0005
+mov bx, 0x0003
+add ax, bx
+mov cx, ax
+```
+
+<Testing answer="0x0008">
+  Dica: `ADD AX, BX` soma o conteúdo de BX ao conteúdo de AX e armazena o
+  resultado em AX.
+</Testing>
+
+---
+
+### Exercício 2 — Colchetes ou não?
+
+Dadas as definições abaixo:
+
+```asm
+section .data
+    numero  dw  100
+```
+
+Qual instrução carrega o **valor 100** em `AX`?
+
+```asm
+; Opção A:
+mov ax, numero
+
+; Opção B:
+mov ax, [numero]
+```
+
+<Testing answer="Opção B">
+  Lembre-se: colchetes acessam o **conteúdo** do endereço. Sem colchetes, você
+  carrega o próprio endereço de memória onde `numero` está guardado.
+</Testing>
+
+---
+
+### Exercício 3 — Modificando a mensagem
+
+No parede de carne, modifique o programa `ola.asm` para imprimir **seu nome** ao invés de "Ola!". Monte e verifique o resultado.
+
+---
+
 ## 🧠 Quiz
 
+**1.** Qual registrador aponta para a próxima instrução a ser executada?
+
+- A) `SP`
+- B) `BP`
+- C) `IP`
+- D) `SI`
+
+> **Resposta correta: C — `IP` (Instruction Pointer)**. Ele é controlado automaticamente pelo processador e por instruções de salto. Você nunca o modifica diretamente.
+
+---
+
+**2.** O que a diretiva `dw` faz?
+
+- A) Define um bloco de 4 bytes
+- B) Define um bloco de 1 byte
+- C) Reserva espaço não inicializado
+- D) Define um bloco de 2 bytes
+
+> **Resposta correta: D — Define um bloco de 2 bytes** (_define word_). Para 1 byte use `db`, para 4 bytes use `dd`.
+
+---
+
+**3.** Por que o bootloader precisa terminar com os bytes `0x55` e `0xAA` (na ordem `0xAA55` em little-endian)?
+
+- A) É uma convenção do NASM para arquivos binários
+- B) A BIOS verifica esses dois bytes no final do setor para confirmar que é um bootloader válido
+- C) O linker exige essa assinatura para gerar binários de 512 bytes
+- D) É necessário para o processador entrar em modo real
+
+> **Resposta correta: B**. Essa é a **boot signature** — se a BIOS não encontrar `0x55 0xAA` nos bytes 511 e 512 do setor, ela simplesmente não vai considerar o disco como bootável.
+
+---
+
+**4.** Qual o endereço onde a BIOS carrega o bootloader?
+
+- A) `0x0000`
+- B) `0x1000`
+- C) `0x7C00`
+- D) `0xFFFF`
+
+> **Resposta correta: C — `0x7C00`**. Herança histórica do IBM PC original. Todo bootloader x86 nasce nesse endereço.
+
+---
+
+**5.** A instrução `INT 0x10` faz o quê?
+
+- A) Divide o valor em AX por 16
+- B) Chama serviços de teclado da BIOS
+- C) Chama serviços de vídeo da BIOS
+- D) Para o processador
+
+> **Resposta correta: C**. `INT 0x10` acessa os serviços de vídeo da BIOS. Para impressão de caractere, usamos a função `0x0E` em `AH`.
+
+---
+
 ## 🔬 Experimento opcional
+
+### Quanto pesa uma instrução?
+
+Você sabe que nosso binário tem 512 bytes. Mas você já se perguntou **quantos bytes cada instrução ocupa**?
+
+No parede de carne, depois de montar seu `ola.asm`, tente o seguinte:
+
+```shell
+nasm -f bin ola.asm -o ola.bin -l ola.lst
+cat ola.lst
+```
+
+O flag `-l` gera um **arquivo de listagem** que mostra, para cada linha de código Assembly, os bytes correspondentes que foram gerados. Você vai ver algo assim:
+
+```
+     1 00000000 BE[0E00]          mov si, mensagem
+     2 00000003 E80000            call imprimir
+```
+
+A coluna do meio são os **opcodes** — os bytes reais que o processador vai ler e executar. Observe:
+
+- Quantos bytes diferentes cada instrução ocupa?
+- O `MOV` sempre tem o mesmo tamanho?
+- Onde no arquivo aparece a assinatura `55 AA`?
+
+Esse experimento é uma janela direta para o que o processador realmente vê. Não existe nível mais baixo que esse — exceto os transistores em si. E esses, por enquanto, ficam de fora do escopo do curso. 😄
+
+
 
 <footer className="flex justify-between">
   <a
@@ -96,7 +538,7 @@ chamado interpretador vai interpreta-lo. O ponto é, mesmo o python precisa dize
     href=""
     className="flex items-center gap-2 hover:cursor-pointer no-underline"
   >
-    Próximo capitulo
+    Próximo capítulo
     <ArrowRight />
   </a>
 </footer>
