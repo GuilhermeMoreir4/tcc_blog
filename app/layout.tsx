@@ -8,6 +8,7 @@ import "./globals.css";
 import Header from "../components/header";
 import { GridBackground } from "@/components/gridPattern";
 import VMWidget from "@/components/VMWidget";
+import { Toaster } from "@/components/ui/sonner";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -38,6 +39,7 @@ export default function RootLayout({
         <Header />
         <GridBackground>{children}</GridBackground>
         <VMWidget />
+        <Toaster position="bottom-left" />
       </body>
     </html>
   );

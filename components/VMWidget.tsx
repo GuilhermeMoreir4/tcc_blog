@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { toast } from "sonner";
 
 declare global {
   interface Window {
@@ -15,6 +16,27 @@ const ICON_SIZE = 52;
 const PANEL_W = 700;
 const PANEL_H = 460;
 const TITLE_H = 36;
+
+function playReadyChime() {
+  try {
+    const ctx = new AudioContext();
+    const notes = [523.25, 659.25, 783.99]; // C5 E5 G5
+    notes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "square";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.18, ctx.currentTime + i * 0.12);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.12 + 0.18);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(ctx.currentTime + i * 0.12);
+      osc.stop(ctx.currentTime + i * 0.12 + 0.2);
+    });
+  } catch {
+    // AudioContext not available
+  }
+}
 
 function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(v, max));
@@ -48,6 +70,23 @@ export default function VMWidget() {
 
   const [bootState, setBootState] = useState<BootState>("booting");
   const [bootProgress, setBootProgress] = useState(0);
+
+  // Toast + sound when VM becomes ready
+  useEffect(() => {
+    if (bootState !== "ready") return;
+    playReadyChime();
+    toast.success("Estou pronto!", {
+      description: "A máquina virtual está inicializada e aguardando seus comandos.",
+      icon: (
+        <img
+          src="https://terraria.wiki.gg/images/thumb/Map_Icon_Wall_of_Flesh.png/25px-Map_Icon_Wall_of_Flesh.png?670a42"
+          alt="Wall of Flesh"
+          style={{ width: 20, height: 20, imageRendering: "pixelated" }}
+        />
+      ),
+      duration: 5000,
+    });
+  }, [bootState]);
 
   // Icon drag
   const iconDragging = useRef(false);
