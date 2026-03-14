@@ -39,7 +39,7 @@ export default function RootLayout({
         <Header />
         <GridBackground>{children}</GridBackground>
         <VMWidget />
-        <Toaster position="bottom-left" />
+        <Toaster position="top-right" />
       </body>
     </html>
   );

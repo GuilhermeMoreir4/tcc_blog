@@ -11,11 +11,13 @@ declare global {
 }
 
 type BootState = "booting" | "ready";
+type ResizeEdge = "e" | "s" | "se" | null;
 
 const ICON_SIZE = 52;
-const PANEL_W = 700;
-const PANEL_H = 460;
+const MIN_W = 320;
+const MIN_H = 200;
 const TITLE_H = 36;
+const HANDLE_SIZE = 8; // px hit area for resize handles
 
 function playReadyChime() {
   try {
@@ -42,34 +44,60 @@ function clamp(v: number, min: number, max: number) {
   return Math.max(min, Math.min(v, max));
 }
 
-/** Compute default panel position relative to the icon */
-function defaultPanelPos(iconX: number, iconY: number) {
+/** Panel position + size */
+type PanelState = { x: number; y: number; w: number; h: number };
+
+function defaultPanelState(iconX: number, iconY: number): PanelState {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const panelW = Math.min(PANEL_W, vw - 16);
-  const totalH = TITLE_H + PANEL_H;
+  const w = Math.min(700, vw - 16);
+  const h = Math.min(460, vh - TITLE_H - 16);
 
   const spaceRight = vw - (iconX + ICON_SIZE);
-  const left =
-    spaceRight >= panelW + 8
+  const x =
+    spaceRight >= w + 8
       ? iconX + ICON_SIZE + 8
-      : Math.max(8, iconX - panelW - 8);
+      : Math.max(8, iconX - w - 8);
 
-  const top = clamp(iconY, 8, vh - totalH - 8);
+  const y = clamp(iconY, 8, vh - TITLE_H - h - 8);
 
-  return { x: left, y: top, w: panelW };
+  return { x, y, w, h };
 }
 
 export default function VMWidget() {
   const [open, setOpen] = useState(false);
-  // Icon position (bottom-right on init)
   const [iconPos, setIconPos] = useState<{ x: number; y: number } | null>(null);
-  // Panel position (auto-calculated until user drags it)
-  const [panelPos, setPanelPos] = useState<{ x: number; y: number; w: number } | null>(null);
-  const panelDetached = useRef(false); // true once user drags the panel manually
+  const [panel, setPanel] = useState<PanelState | null>(null);
+  const panelDetached = useRef(false);
 
   const [bootState, setBootState] = useState<BootState>("booting");
   const [bootProgress, setBootProgress] = useState(0);
+
+  // Icon drag
+  const iconDragging = useRef(false);
+  const iconDragOffset = useRef({ x: 0, y: 0 });
+  const iconMoved = useRef(false);
+
+  // Panel drag
+  const panelDragging = useRef(false);
+  const panelDragOffset = useRef({ x: 0, y: 0 });
+
+  // Panel resize
+  const resizing = useRef<ResizeEdge>(null);
+  const resizeStart = useRef({ mx: 0, my: 0, w: 0, h: 0 });
+
+  const screenRef = useRef<HTMLDivElement>(null);
+  const initialized = useRef(false);
+  const serialBuf = useRef("");
+  const progressTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Init positions
+  useEffect(() => {
+    const ix = window.innerWidth - ICON_SIZE - 24;
+    const iy = window.innerHeight - ICON_SIZE - 24;
+    setIconPos({ x: ix, y: iy });
+    setPanel(defaultPanelState(ix, iy));
+  }, []);
 
   // Toast + sound when VM becomes ready
   useEffect(() => {
@@ -88,33 +116,34 @@ export default function VMWidget() {
     });
   }, [bootState]);
 
-  // Icon drag
-  const iconDragging = useRef(false);
-  const iconDragOffset = useRef({ x: 0, y: 0 });
-  const iconMoved = useRef(false);
-
-  // Panel drag
-  const panelDragging = useRef(false);
-  const panelDragOffset = useRef({ x: 0, y: 0 });
-
-  const screenRef = useRef<HTMLDivElement>(null);
-  const initialized = useRef(false);
-  const serialBuf = useRef("");
-  const progressTimer = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Init positions
-  useEffect(() => {
-    const ix = window.innerWidth - ICON_SIZE - 24;
-    const iy = window.innerHeight - ICON_SIZE - 24;
-    setIconPos({ x: ix, y: iy });
-    setPanelPos(defaultPanelPos(ix, iy));
-  }, []);
-
   // When icon moves and panel is NOT detached, follow the icon
   const updatePanelFromIcon = useCallback((ix: number, iy: number) => {
     if (!panelDetached.current) {
-      setPanelPos(defaultPanelPos(ix, iy));
+      setPanel((p) => p ? { ...defaultPanelState(ix, iy), w: p.w, h: p.h } : p);
     }
+  }, []);
+
+  // ── Global resize listeners ────────────────────────────────
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      if (!resizing.current) return;
+      const { mx, my, w, h } = resizeStart.current;
+      const dx = e.clientX - mx;
+      const dy = e.clientY - my;
+      setPanel((p) => {
+        if (!p) return p;
+        const newW = resizing.current === "s" ? p.w : clamp(w + dx, MIN_W, window.innerWidth - p.x - 8);
+        const newH = resizing.current === "e" ? p.h : clamp(h + dy, MIN_H, window.innerHeight - p.y - 8);
+        return { ...p, w: newW, h: newH };
+      });
+    };
+    const onUp = () => { resizing.current = null; };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
   }, []);
 
   // Start emulator immediately on mount
@@ -232,29 +261,42 @@ export default function VMWidget() {
   // ── Panel title-bar drag ───────────────────────────────────
   const onPanelPointerDown = useCallback(
     (e: React.PointerEvent) => {
-      if (!panelPos) return;
+      if (!panel) return;
       panelDragging.current = true;
-      panelDragOffset.current = { x: e.clientX - panelPos.x, y: e.clientY - panelPos.y };
+      panelDragOffset.current = { x: e.clientX - panel.x, y: e.clientY - panel.y };
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
       e.preventDefault();
     },
-    [panelPos]
+    [panel]
   );
 
   const onPanelPointerMove = useCallback(
     (e: React.PointerEvent) => {
-      if (!panelDragging.current || !panelPos) return;
+      if (!panelDragging.current || !panel) return;
       panelDetached.current = true;
-      const nx = clamp(e.clientX - panelDragOffset.current.x, 0, window.innerWidth - panelPos.w);
+      const nx = clamp(e.clientX - panelDragOffset.current.x, 0, window.innerWidth - panel.w);
       const ny = clamp(e.clientY - panelDragOffset.current.y, 0, window.innerHeight - TITLE_H - 8);
-      setPanelPos((p) => p ? { ...p, x: nx, y: ny } : p);
+      setPanel((p) => p ? { ...p, x: nx, y: ny } : p);
     },
-    [panelPos]
+    [panel]
   );
 
   const onPanelPointerUp = useCallback(() => {
     panelDragging.current = false;
   }, []);
+
+  // ── Resize handle pointer down ─────────────────────────────
+  const onResizePointerDown = useCallback(
+    (edge: ResizeEdge) => (e: React.PointerEvent) => {
+      if (!panel) return;
+      e.stopPropagation();
+      e.preventDefault();
+      resizing.current = edge;
+      resizeStart.current = { mx: e.clientX, my: e.clientY, w: panel.w, h: panel.h };
+      (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    },
+    [panel]
+  );
 
   // SVG progress ring
   const radius = 24;
@@ -262,7 +304,7 @@ export default function VMWidget() {
   const dash = (bootProgress / 100) * circumference;
   const isReady = bootState === "ready";
 
-  if (!iconPos || !panelPos) return null;
+  if (!iconPos || !panel) return null;
 
   return (
     <>
@@ -331,15 +373,14 @@ export default function VMWidget() {
       <div
         style={{
           position: "fixed",
-          left: panelPos.x,
-          top: panelPos.y,
-          width: panelPos.w,
+          left: panel.x,
+          top: panel.y,
+          width: panel.w,
+          height: TITLE_H + panel.h,
           zIndex: 9998,
-          background: "#000",
           border: "1px solid rgba(161,126,64,0.4)",
           borderRadius: 8,
           boxShadow: "0 8px 40px rgba(0,0,0,0.85)",
-          overflow: "hidden",
           display: open ? "flex" : "none",
           flexDirection: "column",
         }}
@@ -357,6 +398,7 @@ export default function VMWidget() {
             height: TITLE_H,
             background: "#111",
             borderBottom: "1px solid rgba(161,126,64,0.3)",
+            borderRadius: "8px 8px 0 0",
             flexShrink: 0,
             cursor: "move",
             userSelect: "none",
@@ -386,7 +428,7 @@ export default function VMWidget() {
             )}
           </span>
           <button
-            onPointerDown={(e) => e.stopPropagation()} // don't start panel drag
+            onPointerDown={(e) => e.stopPropagation()}
             onClick={() => setOpen(false)}
             style={{
               background: "none",
@@ -406,10 +448,69 @@ export default function VMWidget() {
         {/* V86 screen — never unmounts */}
         <div
           ref={screenRef}
-          style={{ flex: 1, height: PANEL_H, background: "#000" }}
+          style={{
+            flex: 1,
+            height: panel.h,
+            background: "#000",
+            overflow: "auto",
+            borderRadius: "0 0 8px 8px",
+          }}
         >
           <div style={{ whiteSpace: "pre", font: "12px monospace", lineHeight: "14px" }} />
           <canvas style={{ display: "none" }} />
+        </div>
+
+        {/* ── Resize handles ── */}
+        {/* Right edge */}
+        <div
+          onPointerDown={onResizePointerDown("e")}
+          style={{
+            position: "absolute",
+            right: 0,
+            top: TITLE_H,
+            width: HANDLE_SIZE,
+            bottom: HANDLE_SIZE,
+            cursor: "ew-resize",
+            touchAction: "none",
+          }}
+        />
+        {/* Bottom edge */}
+        <div
+          onPointerDown={onResizePointerDown("s")}
+          style={{
+            position: "absolute",
+            bottom: 0,
+            left: HANDLE_SIZE,
+            right: HANDLE_SIZE,
+            height: HANDLE_SIZE,
+            cursor: "ns-resize",
+            touchAction: "none",
+          }}
+        />
+        {/* Bottom-right corner */}
+        <div
+          onPointerDown={onResizePointerDown("se")}
+          style={{
+            position: "absolute",
+            bottom: 0,
+            right: 0,
+            width: HANDLE_SIZE + 4,
+            height: HANDLE_SIZE + 4,
+            cursor: "nwse-resize",
+            touchAction: "none",
+            display: "flex",
+            alignItems: "flex-end",
+            justifyContent: "flex-end",
+            paddingBottom: 3,
+            paddingRight: 3,
+          }}
+        >
+          {/* Grip dots */}
+          <svg width={10} height={10} viewBox="0 0 10 10" style={{ opacity: 0.35 }}>
+            <circle cx={8} cy={8} r={1.2} fill="#a17e40" />
+            <circle cx={4} cy={8} r={1.2} fill="#a17e40" />
+            <circle cx={8} cy={4} r={1.2} fill="#a17e40" />
+          </svg>
         </div>
       </div>
     </>
