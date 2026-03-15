@@ -9,6 +9,10 @@
   --foreground: #e4e4de; /* Equivalente ao --color-ethereal */
   --primary: #595f39; /* Equivalente ao --color-moss */
 
+  /* Surface e bordas para componentes interativos */
+  --color-surface: #242424;
+  --color-border: #2e2e2e;
+
   background-color: var(--background);
   color: var(--foreground);
 }
