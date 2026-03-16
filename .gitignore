@@ -41,3 +41,8 @@ yarn-error.log*
 next-env.d.ts
 public/models/*
 public/images/*
+.env*.local
+
+# claude
+.claude/
+CLAUDE.md
