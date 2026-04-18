@@ -1,0 +1,4 @@
+*.img
+*.iso
+public/images/.wrangler
+public/models

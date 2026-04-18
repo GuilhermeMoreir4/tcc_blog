@@ -1,530 +1,279 @@
-import EmulatorDisplay from "@/components/emulator.tsx";
 import If from "@/components/conditional_component.tsx";
 import Testing from "@/components/testing.tsx";
+import DesignNote from "@/components/DesignNote.tsx";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, ArrowRight, ArrowUp } from "lucide-react";
 
 export let show_unix_tutorial = false;
 
 export const metadata = {
-  title: "1. Conhecendo o parede de carne!",
+  title: "1. Conhecendo o Parede de Carne",
   description:
-    "Familiarize-se com o parede de carne escrevendo e linkando seu primeiro código Assembly!",
+    "Familiarize-se com o Parede de Carne escrevendo e linkando seu primeiro código Assembly!",
   date: "2026-03-06T12:00:00Z",
   tags: ["Assembly", "GNU", "Bootloader", "Hardware"],
 };
 
-## 1 - Introdução
+## O botão de ligar
 
-Vida longa e próspera 🖖. Eu estou muito feliz em poder apresentar esse conteúdo que preparei com muito carinho para vocês, cada detalhe do site foi pensado para trazer conforto ao leitor e gerar a melhor experiência possível.
-Tomei a liberdade ambiciosa de colocar uma máquina virtual rodando uma distro do Linux Alphine mais leve que eu consegui montar sem abdicar de alguns confortos como por exemplo: ter um editor de texto que vai realmente te ajudar, usar o linker do GNU o ld, mais tarde falaremos dele. Nos capítulos mais avançados também teremos o ecosistema do Q-Emu para rodarmos nosso próprio bootloader.
+Você aperta o botão de ligar do computador e em poucos segundos está olhando pra uma tela de login. Parece simples. Tão simples que a gente nunca para pra pensar no que acontece entre o apertar do botão e o "bem-vindo" do sistema operacional. Mas tem muita coisa acontecendo nesse meio tempo, e é exatamente esse vão que a gente vai explorar juntos neste livro.
 
-Esse projeto foi criado com o desejo de colocar em prática conceitos que aprendemos na matéria de Sistemas Operacionais, uma vez conversando com meu professor, atual orientador, Fernando, informei que gostaria muito de construir meu próprio sistema do zero, ele disse que na faculdade dele ele teve que fazer seu próprio Kernel, mas teve dois longos semestres, ou seja, um ano, para realizar isso. Com base nisso, resolvi criar eu mesmo meu próprio bootloader, nada complexo nem muito grande, somente algo para me divertir e um certo dia eu pensei, porque não aproveitar e ensinar as outras pessoas também? E bem aqui estou escrevendo essa página de introdução em uma sexta qualquer carregado de café por puro amor.
+Antes do Linux, antes do Windows, antes de qualquer coisa que você já programou, existe um programa minúsculo, quase invisível, que acorda antes de todo mundo. Ele é o _bootloader_. Se o sistema operacional é o capitão da nave, o bootloader é o sujeito que liga os motores e esquenta os painéis antes do capitão chegar na ponte de comando. Sem ele, nada acontece.
 
-Nesse projeto, você vai poder explorar conceitos de linguagens de baixo nível, como Assembly e considerando o contexto, de alto nível também como a linguagem C para podermos criar um Kernel mínimo, afinal o que seria do Spock sem uma tripulação para comandar? Pois é, um bootloader sem um Kernel é a mesma coisa!
+E é esse programa que você vai construir com as suas próprias mãos.
 
-Você pode esperar uma escrita bem descontraída, mas com um teor de rigor sério sobre o conteúdo que será tratado, tudo será discutido nos minímos detalhes para que sua aprendizagem seja detalhada, ao final de cada capítulo, também preparei exercícios para testar seus conhecimentos, você pode criar seu próprio programa, rodar no site para responder e depois marcar o Quiz corretamente, ou se quiser pode rodar em sua própria máquina, mas o setup é por sua conta. A máquina que disponibilizo aqui será suficiente para esse fim, então, seja bem vindo ao parede de carne e vamos ao nosso primeiro programa!
+## O que você vai encontrar aqui
 
-## 1.1 - Bem vindo ao parede de carne e conhecendo seu editor de texto.
+Este projeto nasceu de uma conversa com meu orientador, o professor Fernando. Eu disse que queria construir meu próprio sistema do zero. Ele me contou que na faculdade dele, os alunos tiveram dois semestres inteiros (um ano!) para construir seus próprios kernels. Com base nisso, resolvi criar o meu bootloader e um kernel mínimo. Nada grandioso, nada que vá competir com o GRUB. Algo para aprender, se divertir e, eventualmente, ensinar outras pessoas. E cá estou, escrevendo essa página numa sexta-feira qualquer, carregado de café, por puro amor ao assunto.
 
-### 1.1.1 O que é o parede de carne?
+O que você pode esperar:
+
+Ao longo dos capítulos, você vai trabalhar com Assembly x86 e, mais pra frente, com C. Assembly para falar direto com o hardware, C para construir um kernel mínimo que o bootloader vai carregar. Pense assim: o que seria do Spock sem uma tripulação para comandar? Um bootloader sem kernel é a mesma coisa.
+
+A escrita aqui é descontraída, mas o conteúdo é rigoroso. Cada conceito vai ser discutido nos mínimos detalhes. Ao final de cada capítulo tem exercícios para testar o que você aprendeu, divididos em três níveis: o básico (pra aquecer), o intermediário (pra praticar de verdade) e o desafio (pra quem quer ir além). Você pode criar seu próprio programa, rodar aqui mesmo no site, responder os quizzes, ou se preferir, rodar na sua própria máquina. Mas o setup local é por sua conta. A máquina que disponibilizo aqui é mais que suficiente.
+
+## 1.1 Bem-vindo ao Parede de Carne
+
+### O que é o Parede de Carne?
 
 > "The master and core of the world."
 
-Como eu já disse anteriormente, tomei a liberdade de emular uma máquina virtual no meu blog, aproveitando que os capítulos vão ser longos, ela sempre vai se encontrar
-no final de todo capítulo para que você possa colocar em prática os conceitos que for aprender ao decorrer do livro. E o nome dela é parede de carne! Uma homenagem
-ao jogo <a href="https://terraria.wiki.gg/wiki/Wall_of_Flesh" target="_blank">terraria</a>, no jogo ele é o último boss antes do modo díficil. Como esse é um desafio para quem quer iniciar no mundo dos sistemas operacionais — um lugar onde realmente não existe almoço grátis — achei esse um nome apropriado.
+Tomei a liberdade ambiciosa de emular uma máquina virtual direto no navegador. Uma distro Alpine Linux, a mais leve que consegui montar sem abdicar de confortos essenciais: um editor de texto decente, o assembler do GNU (`as`), o linker (`ld`), e nos capítulos mais avançados, o ecossistema do QEMU para rodarmos nosso próprio bootloader.
 
-Então, agora sem mais enroalação, responda:
+E o nome dela? **Parede de Carne**. Uma homenagem ao <a href="https://terraria.wiki.gg/wiki/Wall_of_Flesh" target="_blank">Terraria</a>. No jogo, a Wall of Flesh é o último boss antes do Hardmode. Quando você derrota ela, o mundo inteiro muda de nível. Achei o nome apropriado: esse é o portal entre "eu sei programar em linguagens de alto nível" e "eu sei o que acontece quando o computador liga". Depois que você passar por aqui, sua visão de computação muda.
 
-Você é familiarizado com sistemas unix like?
+A Parede de Carne vai estar sempre no final de cada capítulo, esperando por você. É ali que você coloca em prática tudo que aprender. Basta clicar no ícone <img src={"https://terraria.wiki.gg/images/thumb/Map_Icon_Wall_of_Flesh.png/25px-Map_Icon_Wall_of_Flesh.png?670a42"} /> e começar.
+
+O usuário é `root` e a senha é só teclar Enter.
+
+### Você conhece sistemas Unix?
+
+Antes de seguir, preciso perguntar: você já mexeu com terminal Linux antes?
 
 <If condition={false}>
-Não, né? Então aqui vão suas primeiras instruções para utilizar a máquina: alguns comandos básicos que você pode usar para verificar se está tudo correto.
+
+Tudo bem se não! Aqui vão os comandos essenciais para navegar na Parede de Carne. Não precisa decorar, você vai pegar no ritmo rapidinho.
+
+Primeiro, vamos verificar se as ferramentas estão instaladas:
+
+```shell
+as --version
+```
+
+Se tudo estiver certo, você vai ver a versão do GNU Assembler, nosso montador de Assembly. É ele que transforma o código que a gente escreve em linguagem de máquina.
 
 ```shell
 ld --version
 ```
 
-Esse simples comando vai mostrar a versão atual do linker do GNU, essa é uma das principais ferramentas que vamos utilizar durante todo o decorrer do curso!
+Esse é o linker do GNU, outra ferramenta fundamental. Ele pega os pedaços que o `as` gera e junta tudo em um programa executável. Mais tarde vamos falar bastante sobre o que ele faz e por quê.
 
-Agora aqui vai uma lista de comandos básicos do linux que vão ser importantes para você
+Agora os comandos do dia a dia no terminal:
 
-### Mostrar o diretório atual
+**Saber onde você está:**
 
 ```shell
 pwd
 ```
 
-### Listar arquivos e pastas do diretório
+Mostra o diretório atual, o "onde estou" do terminal.
+
+**Ver o que tem na pasta:**
 
 ```shell
 ls
 ```
 
-### Listar arquivos com mais detalhes
+Lista os arquivos e pastas. Se quiser mais detalhes (tamanho, permissões, data):
 
 ```shell
 ls -la
 ```
 
-### Criar uma nova pasta
+**Criar uma pasta nova:**
 
 ```shell
 mkdir meu_projeto
 ```
 
-### Entrar em uma pasta
+**Entrar na pasta:**
 
 ```shell
 cd meu_projeto
 ```
 
-### Criar um arquivo vazio
+**Criar um arquivo vazio:**
 
 ```shell
-touch arquivo.asm
+touch programa.asm
 ```
 
-### Mostrar o conteúdo de um arquivo
+**Ver o conteúdo de um arquivo:**
 
 ```shell
-cat arquivo.asm
+cat programa.asm
 ```
 
-### Abrir um arquivo em um editor simples no terminal
+**Editar um arquivo:**
 
-Vamos manipular bastantes arquivos durante a nossa jornada, para isso, você tem um editor de texto de terminal a sua disposição, basta utilizar o comando:
+Vamos manipular muitos arquivos durante nossa jornada. Para isso, você tem o `micro`, um editor de terminal simples e amigável:
 
 ```shell
-micro arquivo.asm
+micro programa.asm
 ```
 
-### Limpar o terminal
+**Limpar o terminal:**
 
 ```shell
 clear
 ```
 
+Com esses comandos você se vira na Parede de Carne. Não precisa dominar o terminal agora. Ao longo dos capítulos, os comandos mais específicos vão aparecendo naturalmente.
+
 </If>
 
----
+## 1.2 Seu primeiro programa Assembly
 
-## 1.2 - O que são registradores?
+Chega de teoria. Vamos escrever código.
 
-Imagine que você está montando um hambúrguer numa cozinha industrial. Você tem dois lugares para trabalhar: a bancada na sua frente — pequena, mas absurdamente rápida de acessar — e uma despensa enorme no fundo da cozinha, que tem tudo, mas você precisa andar até lá toda vez que precisa de algo.
-
-No processador, **registradores são essa bancada**. São pequenas células de memória que ficam _dentro_ do próprio processador. O acesso a eles é tão rápido que é praticamente instantâneo — sem latência, sem barramento de memória, sem conversa. A despensa, nessa analogia, é a RAM.
-
-No x86 de 16-bit (que é onde vamos viver por um bom tempo nesse curso), você tem um conjunto de registradores de propósito geral bastante familiar para quem já leu alguma coisa de Assembly. Vamos conhecê-los:
-
-### Os registradores de propósito geral
-
-| Registrador | Nome completo | Uso convencional                           |
-| ----------- | ------------- | ------------------------------------------ |
-| `AX`        | Accumulator   | Operações aritméticas e retorno de valores |
-| `BX`        | Base          | Endereçamento de memória                   |
-| `CX`        | Counter       | Contadores em loops                        |
-| `DX`        | Data          | Operações de I/O e multiplicação/divisão   |
-
-Cada um desses registradores tem **16 bits** no modo real (o modo que o processador inicia quando você liga o computador — mais sobre isso em breve). Mas tem um detalhe curioso: você pode acessar a metade de cada um deles separadamente.
-
-Veja o `AX` por exemplo:
-
-```
-AX  (16 bits)
-├── AH — parte alta (bits 8 a 15)
-└── AL — parte baixa (bits 0 a 7)
-```
-
-Isso significa que `AX = (AH << 8) | AL`. Parece detalhe agora, mas vai ser extremamente útil quando formos trabalhar com interrupções da BIOS, que recebem parâmetros exatamente assim.
-
-### Os registradores de segmento
-
-Aqui começa a ficar interessante — e um pouco estranho se você vem de linguagens de alto nível. No x86 de 16-bit, a memória é organizada em **segmentos**. Pensa assim: em vez de um único espaço de endereçamento contínuo, você tem vários "quadrantes" de 64KB cada, e registradores especiais que apontam para o início de cada um deles.
-
-| Registrador | Nome          | Função                           |
-| ----------- | ------------- | -------------------------------- |
-| `CS`        | Code Segment  | Aponta para o segmento de código |
-| `DS`        | Data Segment  | Aponta para o segmento de dados  |
-| `SS`        | Stack Segment | Aponta para o segmento de pilha  |
-| `ES`        | Extra Segment | Segmento extra para operações    |
-
-O endereço real de qualquer dado é calculado assim:
-
-```
-Endereço físico = (Segmento × 16) + Offset
-```
-
-Por exemplo: se `DS = 0x1000` e você tenta acessar o offset `0x0050`, o endereço físico que o processador vai usar é `0x10050`. Essa aritmética de segmentos é uma das marcas registradas (e fontes de confusão) do x86 16-bit.
-
-### Os registradores de índice e ponteiro
-
-| Registrador | Nome                | Uso principal                             |
-| ----------- | ------------------- | ----------------------------------------- |
-| `SI`        | Source Index        | Índice de origem em operações com strings |
-| `DI`        | Destination Index   | Índice de destino                         |
-| `SP`        | Stack Pointer       | Aponta para o topo da pilha               |
-| `BP`        | Base Pointer        | Base do stack frame atual                 |
-| `IP`        | Instruction Pointer | Aponta para a próxima instrução           |
-
-O `IP` é especial: **você nunca o modifica diretamente**. Ele é controlado pelo processador conforme as instruções são executadas, e por instruções de salto como `JMP`, `CALL` e `RET`.
-
-> 💡 **Para fixar:** Os registradores são a memória mais rápida que existe no sistema. Quando você escrever Assembly, vai perceber que boa parte do trabalho é gerenciar _quem_ está guardando _o quê_ nesses registradores em cada momento. É quase como um jogo de xadrez — você precisa pensar alguns passos à frente.
-
----
-
-## 1.3 - Variáveis?
-
-Se você chegou aqui vindo de Python, JavaScript ou qualquer linguagem de alto nível, provavelmente está esperando fazer algo como:
-
-```python
-meu_numero = 42
-```
-
-Tenho uma notícia levemente perturbadora: **isso não existe em Assembly**. Pelo menos não da forma que você está acostumado.
-
-Em Assembly, o que chamamos de "variável" é, na verdade, um **rótulo (label) que aponta para uma posição de memória**. Você está literalmente dizendo ao assembler: "nesse endereço aqui, guarda esse valor". Sem tipo, sem nome bonito, sem garbage collector. Você e a memória, frente a frente.
-
-### Definindo dados no segmento de dados
-
-No Assembly x86 (sintaxe NASM, que é o que vamos usar), dados são declarados na seção `.data`:
-
-```asm
-section .data
-    meu_numero  dw  42        ; "define word" — 2 bytes, valor 42
-    mensagem    db  'Oi!', 0  ; "define byte" — sequência de bytes, terminada em 0
-    valor_zero  dw  0         ; inicializado com zero
-```
-
-As diretivas de definição mais comuns são:
-
-| Diretiva | Tamanho | Exemplo         |
-| -------- | ------- | --------------- |
-| `db`     | 1 byte  | `db 0xFF`       |
-| `dw`     | 2 bytes | `dw 1234`       |
-| `dd`     | 4 bytes | `dd 0xDEADBEEF` |
-
-### E se eu quiser reservar espaço sem inicializar?
-
-Para isso existe a seção `.bss`, onde você _reserva_ memória sem definir um valor inicial:
-
-```asm
-section .bss
-    buffer  resb  64   ; reserva 64 bytes
-    contador resw  1   ; reserva espaço para 1 word (2 bytes)
-```
-
-### Usando os dados
-
-Para acessar o conteúdo de uma variável, você usa colchetes:
-
-```asm
-section .data
-    valor  dw  7
-
-section .text
-    mov ax, [valor]   ; carrega o conteúdo de 'valor' em AX
-    mov bx, valor     ; carrega o ENDEREÇO de 'valor' em BX (sem colchetes!)
-```
-
-Esse é um dos pontos que mais confunde quem está começando: **com colchetes você acessa o conteúdo, sem colchetes você acessa o endereço**. É a diferença entre pegar o que está dentro de uma caixa e pegar a caixa inteira.
-
-> ⚠️ **Atenção:** No contexto de um bootloader, você vai trabalhar _sem_ sistema operacional gerenciando a memória por você. Isso significa que se você escrever no lugar errado, pode corromper seu próprio código. Literalmente. Sem segfault, sem aviso. Apenas o caos silencioso do comportamento indefinido.
-
----
-
-## 1.4 - O que é uma interrupção?
-
-Aqui é onde as coisas começam a ficar realmente divertidas.
-
-Imagine que você está dormindo (seu processador executando as instruções tranquilamente) e de repente alguém bate na sua porta (o teclado foi pressionado, o disco terminou uma leitura, o timer disparou). Você precisa parar o que está fazendo, atender quem bateu, e depois voltar exatamente de onde parou. Essa é a ideia de uma **interrupção**.
-
-### Interrupções de hardware vs. software
-
-Existem dois sabores de interrupção que você vai encontrar no nosso contexto:
-
-**Interrupções de hardware** são geradas por dispositivos externos — o teclado, o timer do sistema, o disco. O hardware literalmente interrompe o processador através de um pino elétrico chamado IRQ (Interrupt Request).
-
-**Interrupções de software** são geradas _pelo próprio código_, intencionalmente, usando a instrução `INT`. É assim que, no modo real do x86, você conversa com a **BIOS** — o firmware que vive na placa-mãe e oferece serviços básicos de I/O.
-
-```asm
-mov ah, 0x0E   ; função "teletype output" da BIOS
-mov al, 'A'    ; caractere a imprimir
-int 0x10       ; interrupção da BIOS para serviços de vídeo
-```
-
-Esse trecho acima imprime a letra 'A' na tela. Simples assim. Você preenche os registradores com os parâmetros que a BIOS espera e dispara a interrupção.
-
-### A tabela de vetores de interrupção
-
-Quando uma interrupção é disparada, o processador precisa saber _o que fazer_. Ele consulta uma estrutura chamada **IVT (Interrupt Vector Table)**, que fica nos primeiros 1024 bytes da RAM (endereços `0x0000` a `0x03FF`). Cada entrada na IVT tem 4 bytes e contém o endereço do **handler** — a rotina que vai tratar aquela interrupção.
-
-```
-Endereço 0x0000: vetor da INT 0  (divisão por zero)
-Endereço 0x0004: vetor da INT 1  (debug)
-Endereço 0x0008: vetor da INT 2  (NMI)
-...
-Endereço 0x0040: vetor da INT 16 (0x10 — serviços de vídeo da BIOS)
-...
-```
-
-No nosso bootloader, vamos usar bastante as interrupções da BIOS para imprimir texto, ler o teclado e carregar setores do disco. Tudo isso antes de existir qualquer sistema operacional — é literalmente a camada mais baixa de software que existe.
-
-> 🤯 **Curiosidade:** Quando você escreve `printf("hello")` em C, por baixo dos panos, numa cadeia de chamadas, eventualmente chega em uma syscall do kernel Linux, que por sua vez pode ter chegado aqui — em código de modo real conversando com hardware através de interrupções. Você está aprendendo de onde tudo veio.
-
----
-
-## 1.5 - O que é um linker?
-
-Você escreveu seu código Assembly. O assembler (no nosso caso, o **NASM**) pegou esse código e gerou um arquivo objeto — um arquivo cheio de bytes que representa suas instruções e dados. Mas esse arquivo ainda não está pronto para executar. Por quê?
-
-Porque ele pode ter **referências que ainda não foram resolvidas**.
-
-Pensa num livro com notas de rodapé. O texto menciona "veja nota 7", mas enquanto o livro não estiver finalizado, a nota 7 pode estar numa página diferente toda vez que você reimprime. O linker é o editor que finaliza o livro e garante que "veja nota 7" aponta para a página certa.
-
-### O trabalho do linker
-
-O `ld` (linker do GNU, que você já tem disponível no parede de carne) faz basicamente três coisas:
-
-1. **Combina** múltiplos arquivos objeto em um único executável
-2. **Resolve símbolos** — substitui referências a labels pelo endereço real delas
-3. **Define o layout** de memória — onde o código vai morar, onde os dados vão estar
-
-### Por que isso importa para o bootloader?
-
-No contexto de um bootloader, o linker tem um papel ainda mais crítico. A BIOS carrega o bootloader **sempre no endereço `0x7C00`**. Se o seu código assumir que está em outro lugar, as referências de memória vão estar todas erradas e tudo vai quebrar de maneiras criativas e desoladoras.
-
-Por isso, precisamos dizer ao linker exatamente onde nosso código vai estar:
+Abra a Parede de Carne e crie um arquivo chamado `ola.s`:
 
 ```shell
-ld -Ttext 0x7C00 -o bootloader.bin bootloader.o --oformat binary
+micro ola.s
 ```
 
-Vamos dissecar esse comando:
+Agora digite o seguinte:
 
-- `-Ttext 0x7C00` — define que a seção `.text` começa no endereço `0x7C00`
-- `-o bootloader.bin` — nome do arquivo de saída
-- `bootloader.o` — arquivo objeto de entrada (gerado pelo NASM)
-- `--oformat binary` — gera um binário puro, sem cabeçalhos ELF ou qualquer outro formato. Apenas os bytes do nosso programa.
+```gas
+.section .data
+    msg: .ascii "Ola, Parede de Carne!\n"
+    len = . - msg
 
-> 💡 **Por que `0x7C00`?** É uma herança histórica do IBM PC original de 1981. O DOS precisava de pelo menos 32KB de RAM e queria o bootloader no final desse espaço, mas com margem para a pilha. O cálculo resultou em `0x7C00` e ficou pra sempre.
+.section .text
+    .globl _start
 
----
+_start:
+    movl $4, %eax
+    movl $1, %ebx
+    movl $msg, %ecx
+    movl $len, %edx
+    int $0x80
 
-## 1.6 - Assemblando!
-
-Chegou a hora. Vamos juntar tudo que aprendemos e escrever nosso primeiro programa Assembly que vai rodar no parede de carne.
-
-Mas antes de escrever um bootloader de verdade, vamos fazer algo mais simples: um programa que usa a interrupção da BIOS para imprimir uma mensagem na tela. Isso vai nos permitir verificar que tudo está funcionando antes de mergulharmos na complexidade do bootloader.
-
-### O fluxo completo
-
+    movl $1, %eax
+    movl $0, %ebx
+    int $0x80
 ```
-código .asm  →  [NASM]  →  arquivo .o  →  [ld]  →  binário executável
+
+Calma, eu sei. Se você nunca viu Assembly antes, isso parece uma sopa de letrinhas. Vamos destrinchar.
+
+### O que acabou de acontecer?
+
+O programa tem duas seções. A `.section .data` é onde guardamos dados, coisas que o programa vai usar. No nosso caso, guardamos uma string: `"Ola, Parede de Carne!\n"`. Aquele `\n` no final é o caractere de nova linha, o equivalente a dar um Enter. E a linha `len = . - msg` é um truque esperto: o ponto (`.`) significa "endereço atual", então `. - msg` calcula o tamanho da string automaticamente. Sem precisar contar na mão.
+
+A `.section .text` é onde fica o código executável, as instruções de verdade. E `_start` é o ponto de entrada do programa, o equivalente ao `main()` do C. O `.globl _start` avisa o linker: "ei, o programa começa aqui". É por aqui que a CPU começa a executar.
+
+Agora as instruções em si. Lembra que eu disse que Assembly é falar direto com o hardware? Pois é. Cada `movl` é literalmente "coloque este valor neste registrador". Registradores são caixinhas de memória dentro da CPU, rápidas como um raio e pequenas como um apartamento em São Paulo.
+
+Uma coisa que você vai notar: na sintaxe AT&T que usamos aqui, a ordem é `origem, destino`. O `$` marca valores imediatos (constantes) e o `%` marca registradores. Pode parecer estranho no começo, mas você acostuma rápido.
+
+```gas
+movl $4, %eax       # Syscall número 4 = write (escrever)
+movl $1, %ebx       # File descriptor 1 = stdout (a tela)
+movl $msg, %ecx     # Endereço da nossa mensagem
+movl $len, %edx     # Tamanho da mensagem em bytes
+int $0x80           # "Ei, Linux! Executa isso pra mim."
 ```
 
-### Passo a passo
+A instrução `int $0x80` é uma **interrupção de software**. É assim que um programa em Assembly pede algo ao Linux: "ei, sistema operacional, preparei os registradores com tudo que você precisa. Executa essa syscall pra mim." No caso, estamos pedindo a syscall `write`, que escreve bytes na tela.
 
-**1. Crie o arquivo:**
+As últimas três linhas fazem a mesma coisa, mas pedindo a syscall `exit` (número 1). Sem isso, o programa terminaria de um jeito feio, tentando executar lixo na memória. É boa educação avisar o sistema operacional que você terminou.
+
+```gas
+movl $1, %eax       # Syscall número 1 = exit (sair)
+movl $0, %ebx       # Código de saída 0 = "deu tudo certo"
+int $0x80           # Tchau, Linux!
+```
+
+### Montando e linkando
+
+Código Assembly não roda direto. Precisa de dois passos: **montar** (transformar Assembly em código de máquina) e **linkar** (juntar tudo em um executável).
+
+Salve o arquivo no `micro` (Ctrl+S) e saia (Ctrl+Q). Agora no terminal:
 
 ```shell
-mkdir ~/primeiro_programa
-cd ~/primeiro_programa
-micro ola.asm
+as --32 ola.s -o ola.o
 ```
 
-**2. Digite o código:**
+O GNU Assembler leu seu código e gerou um **arquivo objeto** (`ola.o`). Esse arquivo tem o código de máquina, mas ainda não é um programa completo. Pense nele como as peças de um Lego antes de montar.
 
-```asm
-; ola.asm — Nosso primeiro programa Assembly!
-; Imprime "Ola!" usando a BIOS e para o processador.
-
-[BITS 16]           ; estamos em modo real de 16 bits
-[ORG 0x7C00]        ; diz ao assembler que começamos em 0x7C00
-
-start:
-    mov si, mensagem    ; SI aponta para o início da nossa string
-    call imprimir       ; chamamos a rotina de impressão
-
-    cli                 ; desabilita interrupções
-    hlt                 ; para o processador
-
-imprimir:
-    lodsb               ; carrega o byte apontado por SI em AL, e avança SI
-    or al, al           ; verifica se AL é zero (fim da string)
-    jz .fim             ; se for, pula para .fim
-    mov ah, 0x0E        ; função de teletype da BIOS
-    int 0x10            ; chama a BIOS
-    jmp imprimir        ; repete para o próximo caractere
-.fim:
-    ret
-
-mensagem db 'Ola!', 13, 10, 0   ; nossa string, com enter (\r\n) e terminador nulo
-
-; Padding e assinatura do bootloader
-times 510 - ($ - $$) db 0   ; preenche com zeros até o byte 510
-dw 0xAA55                   ; assinatura mágica — a BIOS procura por isso!
-```
-
-**3. Monte com o NASM:**
+Agora o linker entra em cena:
 
 ```shell
-nasm -f bin ola.asm -o ola.bin
+ld -m elf_i386 ola.o -o ola
 ```
 
-Note que usamos `-f bin` diretamente no NASM desta vez — para programas simples assim, podemos pedir ao NASM para gerar o binário diretamente, sem precisar do linker. Quando formos trabalhar com múltiplos arquivos, o linker entra em ação.
+O `ld` pegou o arquivo objeto e criou um executável chamado `ola`. Agora sim temos um programa de verdade.
 
-**4. Verifique o tamanho:**
+Execute:
 
 ```shell
-ls -la ola.bin
+./ola
 ```
 
-Se tudo correu bem, o arquivo deve ter exatamente **512 bytes** — o tamanho exato de um setor de disco, que é o que a BIOS espera carregar.
-
-> 🎉 **Parabéns!** Você acabou de escrever código que poderia, se gravado num pendrive, ser a primeira coisa que um computador real executa ao ligar. Sem sistema operacional, sem runtime, sem abstração. Só você e o ferro.
-
----
-
-## 🧪 Exercícios
-
-### Exercício 1 — Reconhecendo registradores
-
-Analise o trecho de código abaixo e responda: quais registradores estão sendo usados, e qual o valor final de `AX` ao final da execução?
-
-```asm
-mov ax, 0x0005
-mov bx, 0x0003
-add ax, bx
-mov cx, ax
-```
-
-<Testing answer="0x0008">
-  Dica: `ADD AX, BX` soma o conteúdo de BX ao conteúdo de AX e armazena o
-  resultado em AX.
-</Testing>
-
----
-
-### Exercício 2 — Colchetes ou não?
-
-Dadas as definições abaixo:
-
-```asm
-section .data
-    numero  dw  100
-```
-
-Qual instrução carrega o **valor 100** em `AX`?
-
-```asm
-; Opção A:
-mov ax, numero
-
-; Opção B:
-mov ax, [numero]
-```
-
-<Testing answer="Opção B">
-  Lembre-se: colchetes acessam o **conteúdo** do endereço. Sem colchetes, você
-  carrega o próprio endereço de memória onde `numero` está guardado.
-</Testing>
-
----
-
-### Exercício 3 — Modificando a mensagem
-
-No parede de carne, modifique o programa `ola.asm` para imprimir **seu nome** ao invés de "Ola!". Monte e verifique o resultado.
-
----
-
-## 🧠 Quiz
-
-**1.** Qual registrador aponta para a próxima instrução a ser executada?
-
-- A) `SP`
-- B) `BP`
-- C) `IP`
-- D) `SI`
-
-> **Resposta correta: C — `IP` (Instruction Pointer)**. Ele é controlado automaticamente pelo processador e por instruções de salto. Você nunca o modifica diretamente.
-
----
-
-**2.** O que a diretiva `dw` faz?
-
-- A) Define um bloco de 4 bytes
-- B) Define um bloco de 1 byte
-- C) Reserva espaço não inicializado
-- D) Define um bloco de 2 bytes
-
-> **Resposta correta: D — Define um bloco de 2 bytes** (_define word_). Para 1 byte use `db`, para 4 bytes use `dd`.
-
----
-
-**3.** Por que o bootloader precisa terminar com os bytes `0x55` e `0xAA` (na ordem `0xAA55` em little-endian)?
-
-- A) É uma convenção do NASM para arquivos binários
-- B) A BIOS verifica esses dois bytes no final do setor para confirmar que é um bootloader válido
-- C) O linker exige essa assinatura para gerar binários de 512 bytes
-- D) É necessário para o processador entrar em modo real
-
-> **Resposta correta: B**. Essa é a **boot signature** — se a BIOS não encontrar `0x55 0xAA` nos bytes 511 e 512 do setor, ela simplesmente não vai considerar o disco como bootável.
-
----
-
-**4.** Qual o endereço onde a BIOS carrega o bootloader?
-
-- A) `0x0000`
-- B) `0x1000`
-- C) `0x7C00`
-- D) `0xFFFF`
-
-> **Resposta correta: C — `0x7C00`**. Herança histórica do IBM PC original. Todo bootloader x86 nasce nesse endereço.
-
----
-
-**5.** A instrução `INT 0x10` faz o quê?
-
-- A) Divide o valor em AX por 16
-- B) Chama serviços de teclado da BIOS
-- C) Chama serviços de vídeo da BIOS
-- D) Para o processador
-
-> **Resposta correta: C**. `INT 0x10` acessa os serviços de vídeo da BIOS. Para impressão de caractere, usamos a função `0x0E` em `AH`.
-
----
-
-## 🔬 Experimento opcional
-
-### Quanto pesa uma instrução?
-
-Você sabe que nosso binário tem 512 bytes. Mas você já se perguntou **quantos bytes cada instrução ocupa**?
-
-No parede de carne, depois de montar seu `ola.asm`, tente o seguinte:
-
-```shell
-nasm -f bin ola.asm -o ola.bin -l ola.lst
-cat ola.lst
-```
-
-O flag `-l` gera um **arquivo de listagem** que mostra, para cada linha de código Assembly, os bytes correspondentes que foram gerados. Você vai ver algo assim:
+Se tudo deu certo, você deve ver na tela:
 
 ```
-     1 00000000 BE[0E00]          mov si, mensagem
-     2 00000003 E80000            call imprimir
+Ola, Parede de Carne!
 ```
 
-A coluna do meio são os **opcodes** — os bytes reais que o processador vai ler e executar. Observe:
+Parabéns. Você acabou de escrever, montar e rodar seu primeiro programa Assembly. Não é um bootloader ainda, mas é o primeiro passo. Todo prédio começa pelo alicerce.
 
-- Quantos bytes diferentes cada instrução ocupa?
-- O `MOV` sempre tem o mesmo tamanho?
-- Onde no arquivo aparece a assinatura `55 AA`?
+### Por que dois passos?
 
-Esse experimento é uma janela direta para o que o processador realmente vê. Não existe nível mais baixo que esse — exceto os transistores em si. E esses, por enquanto, ficam de fora do escopo do curso. 😄
+Você deve estar se perguntando: por que não pular direto do Assembly pro executável? Boa pergunta. A resposta curta é que separar a montagem da linkagem permite que você construa programas com múltiplos arquivos. Imagine que seu bootloader tem 3 arquivos `.s` diferentes. O `as` monta cada um separadamente, gerando 3 arquivos `.o`. Depois o `ld` junta os três em um único executável, resolvendo referências entre eles (tipo quando um arquivo chama uma função de outro).
 
+No nosso caso simples, com um único arquivo, parece um passo desnecessário. Mas confie no processo: quando chegarmos ao Stage 2 e ao kernel em C, você vai agradecer por ter entendido isso cedo.
 
+<DesignNote title="Por que int 0x80?" variant="design">
+
+A interrupção 0x80 é a forma clássica de fazer syscalls no Linux de 32 bits. Em sistemas mais modernos (64 bits), usamos a instrução `syscall` em vez de `int 0x80`, e os registradores são diferentes (rax, rdi, rsi, rdx). Estamos usando 32 bits aqui porque o bootloader roda em Real Mode, que é um ambiente de 16/32 bits. O padrão de "preparar registradores e disparar uma interrupção" é exatamente o que vamos fazer quando estivermos falando com o BIOS nos próximos capítulos, só que em vez de `int 0x80` (Linux), vamos usar `int 0x10` (vídeo), `int 0x13` (disco) e outros.
+
+</DesignNote>
+
+## 1.3 Entendendo o fluxo
+
+Vamos recapitular o que aconteceu:
+
+1. Você escreveu código Assembly em um arquivo `.s`
+2. O GNU Assembler (`as`) transformou isso em código de máquina (`.o`)
+3. O linker (`ld`) criou um executável
+4. O Linux executou o programa, que usou uma interrupção para pedir ao SO que imprimisse texto na tela
+
+Esse fluxo (escrever → montar → linkar → executar) vai ser seu dia a dia nos próximos capítulos. A diferença é que, em breve, quem vai executar seu código não vai ser o Linux. Vai ser o hardware direto, sem sistema operacional por baixo. E aí a brincadeira fica interessante de verdade.
+
+No próximo capítulo, vamos entender o que é o Real Mode, por que a Intel inventou essa coisa de segmentação de memória em 1978, e por que a gente ainda lida com essa herança quarenta e tantos anos depois. Também vamos começar a nos despedir do conforto do Linux e encarar o hardware de frente.
+
+Seu bootloader está nascendo. Cuide bem dele.
+
+---
+
+## Exercícios
+
+### Nível 1: Aquecimento
+
+Modifique o programa `ola.s` para imprimir uma mensagem diferente. Pode ser seu nome, uma citação, qualquer coisa. O legal é que o `len = . - msg` recalcula o tamanho sozinho, então você só precisa trocar o texto da string.
+
+### Nível 2: Prática
+
+Escreva um programa que imprima **duas linhas** de texto. Você vai precisar de duas strings na `.section .data` (tipo `msg` e `msg2`, cada uma com seu `len`) e duas chamadas de `int $0x80` com a syscall `write`. Dica: faça uma segunda sequência de `movl` + `int $0x80` apontando para a segunda mensagem.
+
+### Nível 3: Desafio
+
+Escreva um programa que imprima os números de 1 a 5 na tela, cada um em uma linha separada. Parece simples, mas tem um detalhe: o número 1 não é o mesmo que o caractere '1'. O caractere '1' tem o valor ASCII 49. Você vai precisar pensar em como converter o número para o caractere correspondente antes de imprimir. Se travar, não se sinta mal. Pesquise sobre a tabela ASCII e volte depois.
+
+---
+
+Agora é com você. Abra a Parede de Carne e divirta-se!
 
 <footer className="flex justify-between">
   <a

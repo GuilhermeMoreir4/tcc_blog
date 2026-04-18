@@ -38,7 +38,7 @@ export default function RootLayout({
       <body className="antialiased">
         <Header />
         <GridBackground>{children}</GridBackground>
-        <VMWidget />
+      
         <Toaster position="top-right" />
       </body>
     </html>

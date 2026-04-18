@@ -8,7 +8,7 @@ export default function Header() {
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-white/5 bg-eerie/80 backdrop-blur-md">
-      {/* Scroll progress bar */}
+    
       <motion.div
         className="absolute bottom-0 left-0 right-0 h-[2px] origin-left bg-moss"
         style={{ scaleX: scrollYProgress }}

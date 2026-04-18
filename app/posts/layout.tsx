@@ -1,4 +1,5 @@
 import Navigation from "@/components/navigation";
+import VMWidget from "@/components/VMWidget";
 import { getBooks } from "@/lib/content";
 
 export default function PostsLayout({
@@ -15,6 +16,7 @@ export default function PostsLayout({
       </aside>
       <main className="ml-80 flex flex-col items-center py-12 px-8 min-h-screen">
         {children}
+        <VMWidget />
       </main>
     </div>
   );

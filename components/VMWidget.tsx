@@ -29,7 +29,10 @@ function playReadyChime() {
       osc.type = "square";
       osc.frequency.value = freq;
       gain.gain.setValueAtTime(0.18, ctx.currentTime + i * 0.12);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.12 + 0.18);
+      gain.gain.exponentialRampToValueAtTime(
+        0.001,
+        ctx.currentTime + i * 0.12 + 0.18,
+      );
       osc.connect(gain);
       gain.connect(ctx.destination);
       osc.start(ctx.currentTime + i * 0.12);
@@ -55,9 +58,7 @@ function defaultPanelState(iconX: number, iconY: number): PanelState {
 
   const spaceRight = vw - (iconX + ICON_SIZE);
   const x =
-    spaceRight >= w + 8
-      ? iconX + ICON_SIZE + 8
-      : Math.max(8, iconX - w - 8);
+    spaceRight >= w + 8 ? iconX + ICON_SIZE + 8 : Math.max(8, iconX - w - 8);
 
   const y = clamp(iconY, 8, vh - TITLE_H - h - 8);
 
@@ -104,7 +105,9 @@ export default function VMWidget() {
     if (bootState !== "ready") return;
     playReadyChime();
     toast.success("Estou pronto!", {
-      description: "A máquina virtual está inicializada e aguardando seus comandos.",
+      description:
+        "A máquina virtual está inicializada e aguardando seus comandos.",
+      className: "border-2 border-solid",
       icon: (
         <img
           src="https://terraria.wiki.gg/images/thumb/Map_Icon_Wall_of_Flesh.png/25px-Map_Icon_Wall_of_Flesh.png?670a42"
@@ -112,14 +115,16 @@ export default function VMWidget() {
           style={{ width: 20, height: 20, imageRendering: "pixelated" }}
         />
       ),
-      duration: 5000,
+      duration: 500000,
     });
   }, [bootState]);
 
   // When icon moves and panel is NOT detached, follow the icon
   const updatePanelFromIcon = useCallback((ix: number, iy: number) => {
     if (!panelDetached.current) {
-      setPanel((p) => p ? { ...defaultPanelState(ix, iy), w: p.w, h: p.h } : p);
+      setPanel((p) =>
+        p ? { ...defaultPanelState(ix, iy), w: p.w, h: p.h } : p,
+      );
     }
   }, []);
 
@@ -132,12 +137,20 @@ export default function VMWidget() {
       const dy = e.clientY - my;
       setPanel((p) => {
         if (!p) return p;
-        const newW = resizing.current === "s" ? p.w : clamp(w + dx, MIN_W, window.innerWidth - p.x - 8);
-        const newH = resizing.current === "e" ? p.h : clamp(h + dy, MIN_H, window.innerHeight - p.y - 8);
+        const newW =
+          resizing.current === "s"
+            ? p.w
+            : clamp(w + dx, MIN_W, window.innerWidth - p.x - 8);
+        const newH =
+          resizing.current === "e"
+            ? p.h
+            : clamp(h + dy, MIN_H, window.innerHeight - p.y - 8);
         return { ...p, w: newW, h: newH };
       });
     };
-    const onUp = () => { resizing.current = null; };
+    const onUp = () => {
+      resizing.current = null;
+    };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
     return () => {
@@ -177,7 +190,10 @@ export default function VMWidget() {
           relay_url: "wisps://wisp.mercurywork.shop",
         },
         hda: {
-          url: "/images/alpine-dev.img",
+          url:
+            process.env.NODE_ENV === "development"
+              ? "/images/alpine-dev.img"
+              : "https://files.bootloader.blog/alpine-dev.img",
           async: true,
           size: 1073741824,
         },
@@ -233,24 +249,35 @@ export default function VMWidget() {
       if (!iconPos) return;
       iconDragging.current = true;
       iconMoved.current = false;
-      iconDragOffset.current = { x: e.clientX - iconPos.x, y: e.clientY - iconPos.y };
+      iconDragOffset.current = {
+        x: e.clientX - iconPos.x,
+        y: e.clientY - iconPos.y,
+      };
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
       e.preventDefault();
     },
-    [iconPos]
+    [iconPos],
   );
 
   const onIconPointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (!iconDragging.current || !iconPos) return;
-      const nx = clamp(e.clientX - iconDragOffset.current.x, 0, window.innerWidth - ICON_SIZE);
-      const ny = clamp(e.clientY - iconDragOffset.current.y, 0, window.innerHeight - ICON_SIZE);
+      const nx = clamp(
+        e.clientX - iconDragOffset.current.x,
+        0,
+        window.innerWidth - ICON_SIZE,
+      );
+      const ny = clamp(
+        e.clientY - iconDragOffset.current.y,
+        0,
+        window.innerHeight - ICON_SIZE,
+      );
       if (Math.abs(nx - iconPos.x) > 4 || Math.abs(ny - iconPos.y) > 4)
         iconMoved.current = true;
       setIconPos({ x: nx, y: ny });
       updatePanelFromIcon(nx, ny);
     },
-    [iconPos, updatePanelFromIcon]
+    [iconPos, updatePanelFromIcon],
   );
 
   const onIconPointerUp = useCallback(() => {
@@ -263,22 +290,33 @@ export default function VMWidget() {
     (e: React.PointerEvent) => {
       if (!panel) return;
       panelDragging.current = true;
-      panelDragOffset.current = { x: e.clientX - panel.x, y: e.clientY - panel.y };
+      panelDragOffset.current = {
+        x: e.clientX - panel.x,
+        y: e.clientY - panel.y,
+      };
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
       e.preventDefault();
     },
-    [panel]
+    [panel],
   );
 
   const onPanelPointerMove = useCallback(
     (e: React.PointerEvent) => {
       if (!panelDragging.current || !panel) return;
       panelDetached.current = true;
-      const nx = clamp(e.clientX - panelDragOffset.current.x, 0, window.innerWidth - panel.w);
-      const ny = clamp(e.clientY - panelDragOffset.current.y, 0, window.innerHeight - TITLE_H - 8);
-      setPanel((p) => p ? { ...p, x: nx, y: ny } : p);
+      const nx = clamp(
+        e.clientX - panelDragOffset.current.x,
+        0,
+        window.innerWidth - panel.w,
+      );
+      const ny = clamp(
+        e.clientY - panelDragOffset.current.y,
+        0,
+        window.innerHeight - TITLE_H - 8,
+      );
+      setPanel((p) => (p ? { ...p, x: nx, y: ny } : p));
     },
-    [panel]
+    [panel],
   );
 
   const onPanelPointerUp = useCallback(() => {
@@ -292,10 +330,15 @@ export default function VMWidget() {
       e.stopPropagation();
       e.preventDefault();
       resizing.current = edge;
-      resizeStart.current = { mx: e.clientX, my: e.clientY, w: panel.w, h: panel.h };
+      resizeStart.current = {
+        mx: e.clientX,
+        my: e.clientY,
+        w: panel.w,
+        h: panel.h,
+      };
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
     },
-    [panel]
+    [panel],
   );
 
   // SVG progress ring
@@ -326,7 +369,11 @@ export default function VMWidget() {
           width: ICON_SIZE,
           height: ICON_SIZE,
         }}
-        title={isReady ? "Abrir terminal Alpine Linux" : `Iniciando VM… ${bootProgress}%`}
+        title={
+          isReady
+            ? "Abrir terminal Alpine Linux"
+            : `Iniciando VM… ${bootProgress}%`
+        }
         aria-label="Terminal Alpine Linux"
       >
         <svg
@@ -355,7 +402,9 @@ export default function VMWidget() {
             transform={`rotate(-90 ${ICON_SIZE / 2} ${ICON_SIZE / 2})`}
             style={{
               transition: "stroke-dasharray 0.35s ease, stroke 0.5s",
-              filter: isReady ? "drop-shadow(0 0 5px #86efac)" : "drop-shadow(0 0 5px #f59e0b)",
+              filter: isReady
+                ? "drop-shadow(0 0 5px #86efac)"
+                : "drop-shadow(0 0 5px #f59e0b)",
             }}
           />
           <image
@@ -456,7 +505,13 @@ export default function VMWidget() {
             borderRadius: "0 0 8px 8px",
           }}
         >
-          <div style={{ whiteSpace: "pre", font: "12px monospace", lineHeight: "14px" }} />
+          <div
+            style={{
+              whiteSpace: "pre",
+              font: "12px monospace",
+              lineHeight: "14px",
+            }}
+          />
           <canvas style={{ display: "none" }} />
         </div>
 
@@ -506,7 +561,12 @@ export default function VMWidget() {
           }}
         >
           {/* Grip dots */}
-          <svg width={10} height={10} viewBox="0 0 10 10" style={{ opacity: 0.35 }}>
+          <svg
+            width={10}
+            height={10}
+            viewBox="0 0 10 10"
+            style={{ opacity: 0.35 }}
+          >
             <circle cx={8} cy={8} r={1.2} fill="#a17e40" />
             <circle cx={4} cy={8} r={1.2} fill="#a17e40" />
             <circle cx={8} cy={4} r={1.2} fill="#a17e40" />

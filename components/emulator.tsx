@@ -54,9 +54,9 @@ export default function EmulatorDisplay() {
           relay_url: "wisps://wisp.mercurywork.shop",
         },
         hda: {
-          url: "/images/alpine-dev.img",
+          url: "https://files.bootloader.blog/alpine-dev.img",
           async: true,
-          size: 1073741824
+          size: 1073741824,
         },
         // cdrom: {
         //   url: "/images/alpine-dev.img",
