@@ -1,0 +1,518 @@
+import { ArrowLeft, ArrowRight } from "lucide-react";
+import Challenge from "@/components/Challenge.tsx";
+import DesignNote from "@/components/DesignNote.tsx";
+
+export const metadata = {
+  title: "3. Assembly x86 sem mistério",
+  description:
+    "O subset de Assembly que importa pro OA. Registradores, movs, jumps, calls, e o que cada um faz. Sem enciclopédia, com o necessário pra você ler Stage 1 e Stage 2 sem consultar manual a cada linha.",
+  date: "2026-05-10T12:00:00Z",
+  tags: ["GAS", "GCC", "ld", "QEMU", "Make", "Ferramentas"],
+};
+
+# Assembly x86 sem mistério
+
+Em _O Senhor dos Anéis_, o Conselho de Elrond é um dos capítulos mais densos do livro. Tem elfos, anões, humanos, magos, todo mundo contando sua parte da história. Pra um leitor que abriu o livro pela primeira vez, é overwhelming. Mas Tolkien faz uma coisa esperta: ele não tenta apresentar **toda** a Terra Média ali. Ele apresenta o suficiente pra Frodo aceitar a missão. Quem é Saruman, o que faz o anel, por que Mordor é problema. Aragorn, Legolas, Gimli e Boromir cabem nesse capítulo porque vão pra Sociedade. Galadriel não. Tom Bombadil não. Glorfindel mal aparece. Tolkien sabia que apresentar todo mundo de uma vez ia matar o leitor.
+
+Esse capítulo segue a mesma regra. Assembly x86 tem **muita** instrução. Os manuais da Intel ocupam quatro volumes de mais de mil páginas cada. Você não vai aprender tudo, nem precisa. Você precisa do subset que vai usar no Stage 1, no Stage 2 e no kernel. Cerca de quarenta instruções. Talvez menos. Esse capítulo apresenta exatamente esse subset. Quando uma instrução nova aparecer mais tarde no OA, eu explico ali. Tom Bombadil fica de fora.
+
+No fim, você vai ter um modelo mental claro do que cada parte de uma instrução faz, e vai ler código Assembly no resto do OA com fluência razoável. Não é fluência de quem escreve Assembly como ocupação, é fluência de quem entende o que está lendo.
+
+---
+
+## O que é uma instrução, fisicamente
+
+Antes do que cada instrução faz, vale entender o que **é** uma instrução. No processador, instruções são bytes na memória. Quando o processador está executando, ele faz um ciclo que se repete pra sempre:
+
+1. Lê alguns bytes do endereço apontado por `IP` (instruction pointer).
+2. Decodifica esses bytes como uma instrução.
+3. Executa a instrução.
+4. Avança `IP` pra próxima instrução.
+5. Volta pro passo 1.
+
+É isso. Um processador não faz mais nada na vida além desse ciclo. Tudo que você vê acontecer numa máquina (gráficos, rede, jogos, IA) é alguma variação dessa rotina rodando bilhões de vezes por segundo.
+
+Quando você escreve `movw $0x1234, %ax` em um arquivo `.s`, o assembler converte isso em alguns bytes específicos (no caso, `B8 34 12`, mais ou menos). Quando o processador encontra esses bytes em memória durante a execução, ele decodifica como "mover o valor `0x1234` pro registrador `AX`" e faz isso. Você não está dando ordens. Você está plantando bytes que vão ser interpretados depois.
+
+Isso parece filosófico mas tem uma consequência prática: **o assembler é só um tradutor**. Ele não roda nada. Ele transforma texto em bytes. Se você escrever uma instrução errada, o assembler vai gerar os bytes errados, e o processador vai executar essas instruções erradas. Não tem validação semântica.
+
+---
+
+## Registradores: a memória mais rápida que existe
+
+O processador tem uma quantidade pequena de variáveis internas, chamadas **registradores**. Eles ficam dentro do chip, ao lado da unidade de execução. Operações com registradores são mais rápidas que operações com memória porque o dado não precisa atravessar o bus. Pense em registradores como gavetas em cima da sua mesa e memória RAM como armários do outro lado da sala.
+
+No x86 de 32 bits, os registradores principais são:
+
+```
+EAX  - acumulador (resultados de operações aritméticas)
+EBX  - base (uso geral, mas convencional como base de endereços)
+ECX  - contador (usado em loops)
+EDX  - data (par com EAX em operações de 64 bits)
+ESI  - source index (origem em operações de string)
+EDI  - destination index (destino em operações de string)
+EBP  - base pointer (base do frame de pilha atual)
+ESP  - stack pointer (topo da pilha)
+```
+
+Cada um desses registradores tem 32 bits. Mas (e aqui é onde fica esquisito) você pode acessar **pedaços** deles:
+
+```
+ 31              16 15      8 7       0
+┌──────────────────┬─────────┬─────────┐
+│                  │   AH    │   AL    │  ← AL (8 bits baixos)
+│                  ├─────────┴─────────┤  ← AX (16 bits baixos)
+│                       AX             │
+├──────────────────────────────────────┤  ← EAX (32 bits completos)
+│                      EAX             │
+└──────────────────────────────────────┘
+```
+
+`EAX` são os 32 bits. `AX` são os 16 bits baixos. `AH` são os bits 8 a 15. `AL` são os bits 0 a 7. Modificar `AL` modifica também os 8 bits baixos de `AX` e de `EAX`. Eles compartilham fisicamente os mesmos bits.
+
+O mesmo vale pra `EBX`, `ECX`, `EDX`: cada um tem `BX`/`BH`/`BL`, `CX`/`CH`/`CL`, `DX`/`DH`/`DL`. Pra `ESI`, `EDI`, `EBP` e `ESP`, existe a versão de 16 bits (`SI`, `DI`, `BP`, `SP`) mas não tem versão de 8 bits acessível.
+
+Por que essa sobreposição? Compatibilidade. O 8086 de 1978 tinha `AX` (16 bits) com `AH`/`AL`. O 80386 de 1985 estendeu pra `EAX` mantendo os antigos pra código velho continuar rodando. Você está vivendo essa decisão de 1985 toda vez que escreve Assembly x86.
+
+Além desses, tem **registradores de segmento**: `CS`, `DS`, `ES`, `FS`, `GS`, `SS`. São de 16 bits e funcionam de forma especial (você já viu segmentação no contexto de Real Mode). Não são pra cálculo, são pra endereçamento.
+
+E tem o `EIP` (instruction pointer) e `EFLAGS`. O `EIP` aponta pra próxima instrução. O `EFLAGS` tem bits de status que mudam após operações: zero flag, carry flag, sign flag, etc. Você não escreve diretamente neles na maioria do tempo, mas instruções de comparação e branch leem eles.
+
+---
+
+## A primeira instrução: mov
+
+`mov` é a instrução mais comum. Ela copia dados de um lugar pro outro:
+
+```nasm
+movw $0x1234, %ax       # copia 0x1234 pra AX (16 bits)
+movb $0x42, %al         # copia 0x42 pra AL (8 bits)
+movl $100, %eax         # copia 100 pra EAX (32 bits)
+movw %ax, %bx           # copia AX pra BX
+```
+
+Repare nos sufixos. `movb` é byte (8 bits), `movw` é word (16 bits), `movl` é long (32 bits). O sufixo precisa bater com o tamanho do registrador.
+
+`mov` também acessa memória:
+
+```nasm
+movw (%si), %ax         # copia 2 bytes do endereço em SI pra AX
+movw %ax, (%di)         # copia AX pros 2 bytes no endereço em DI
+movb 4(%bx), %al        # copia 1 byte do endereço em [BX + 4] pra AL
+```
+
+O parêntese em volta de um registrador significa "use o conteúdo do registrador como endereço". Sem o parêntese, é o valor literal. Essa distinção é fundamental: `%si` é o conteúdo de SI, `(%si)` é a memória apontada por SI.
+
+O número antes do parêntese é um offset constante somado ao endereço. `4(%bx)` significa "endereço em BX, mais 4". Útil pra acessar campos de struct.
+
+---
+
+## Aritmética: add, sub, inc, dec
+
+`add` soma, `sub` subtrai. Mesma sintaxe do `mov`:
+
+```nasm
+addl $4, %eax           # EAX = EAX + 4
+subl $8, %esp           # ESP = ESP - 8
+addl %ebx, %eax         # EAX = EAX + EBX
+```
+
+Note a ordem: `add origem, destino` faz `destino = destino + origem`. Em sintaxe Intel seria o contrário, mas a gente está em AT&T.
+
+`inc` e `dec` são incrementos e decrementos de 1:
+
+```nasm
+incw %ax                # AX = AX + 1
+decl %ecx               # ECX = ECX - 1
+```
+
+Use `inc` e `dec` quando o incremento for de 1. É mais curto que `add` e gera bytes menores na instrução.
+
+Tem também `mul`, `div`, `imul`, `idiv` pra multiplicação e divisão. A gente vai ver eles quando aparecerem; no Stage 1 e 2 quase não usamos.
+
+---
+
+## Operações lógicas: and, or, xor, not
+
+Essas operam bit a bit:
+
+```nasm
+andb $0x0F, %al         # AL = AL & 0x0F (zera os 4 bits altos)
+orb  $0x80, %al         # AL = AL | 0x80 (seta o bit 7)
+xorw %ax, %ax           # AX = AX ^ AX = 0 (jeito clássico de zerar)
+notl %eax               # EAX = ~EAX (inverte todos os bits)
+```
+
+O `xor` de um registrador com ele mesmo sempre dá zero, e essa é a forma idiomática de zerar registrador no x86 porque gera menos bytes que `movl $0, %eax`. Você vai ver `xorw %ax, %ax` em todo bootloader.
+
+Operações lógicas também atualizam flags. Em particular, a flag de zero é setada se o resultado for zero. Por isso aquele truque do capítulo 3:
+
+```nasm
+orb %al, %al            # AL OR AL = AL, mas atualiza a flag de zero
+jz fim                  # pula se AL == 0
+```
+
+`orb %al, %al` parece inútil (o valor não muda), mas o efeito colateral nas flags é o ponto.
+
+---
+
+## Comparação e jumps
+
+Pra controle de fluxo, a gente compara e pula. `cmp` é como uma subtração que não guarda o resultado, só atualiza as flags:
+
+```nasm
+cmpb $4, %al            # compara AL com 4 (atualiza flags)
+```
+
+Depois do `cmp`, você usa um jump condicional baseado nas flags:
+
+```nasm
+je  label   # pula se igual (zero flag setada)
+jne label   # pula se diferente
+jl  label   # pula se menor (signed)
+jle label   # pula se menor ou igual
+jg  label   # pula se maior
+jge label   # pula se maior ou igual
+jb  label   # pula se menor (unsigned)
+ja  label   # pula se maior (unsigned)
+jz  label   # pula se zero (sinônimo de je)
+jnz label   # pula se não zero (sinônimo de jne)
+jc  label   # pula se carry flag setada
+jnc label   # pula se carry flag limpa
+```
+
+A diferença entre `jl/jg` e `jb/ja` é interpretação: `jl/jg` tratam os números como signed (com sinal, complemento de dois), `jb/ja` como unsigned (sem sinal). Pra endereços e contadores, geralmente é `jb/ja`. Pra cálculos com possíveis negativos, é `jl/jg`. Errar isso causa bugs sutis.
+
+E tem o jump incondicional:
+
+```nasm
+jmp label               # pula sempre
+jmp *%eax               # pula pro endereço em EAX
+```
+
+A versão `jmp *%eax` (com asterisco) é "indirect jump": o endereço de destino vem do registrador. Útil pra dispatch tables e function pointers.
+
+---
+
+## Labels: marcas no código
+
+Pra os jumps terem onde pousar, você define labels:
+
+```nasm
+loop_start:
+    incw %ax
+    cmpw $10, %ax
+    jl loop_start
+```
+
+Labels são nomes que o assembler resolve em endereços. `loop_start:` define o ponto. `jl loop_start` pula pra ele.
+
+GAS também aceita **labels numéricas locais**, que são muito úteis pra loops curtos:
+
+```nasm
+1:
+    lodsb
+    orb %al, %al
+    jz 2f
+    # imprime AL
+    jmp 1b
+2:
+```
+
+`1f` significa "a próxima label `1`, pra frente". `1b` significa "a próxima label `1`, pra trás". Você pode reusar `1`, `2`, etc, em loops diferentes sem conflito. Isso evita ter que inventar nomes pra todos os loops minúsculos do programa.
+
+---
+
+## A pilha: push e pop
+
+A pilha é uma região de memória usada como estrutura LIFO (last in, first out). É onde funções guardam endereços de retorno, salvam registradores, alocam variáveis locais.
+
+`push` empurra um valor pra pilha. `pop` tira de volta:
+
+```nasm
+pushl %eax              # empilha EAX (ESP -= 4, [ESP] = EAX)
+popl %eax               # desempilha pra EAX (EAX = [ESP], ESP += 4)
+```
+
+A pilha cresce **pra baixo** no x86. `push` decrementa `ESP` e escreve no novo topo. `pop` lê do topo e incrementa `ESP`. Isso é uma decisão arbitrária da arquitetura, mas é universal em x86. Decora.
+
+Tem também `pusha` e `popa` (e suas versões `pushal`/`popal` em 32 bits) que empilham/desempilham **todos os registradores de uso geral de uma vez**. Útil em funções que querem garantir que não vão sujar registradores do caller:
+
+```nasm
+minha_funcao:
+    pusha               # salva todos os registradores
+    # ... faz coisas ...
+    popa                # restaura todos os registradores
+    ret
+```
+
+---
+
+## Funções: call e ret
+
+`call` chama uma função. `ret` retorna:
+
+```nasm
+    call print_string
+    # quando print_string retornar, o código continua aqui
+
+print_string:
+    # ... faz coisas ...
+    ret
+```
+
+Mecanicamente, `call` faz duas coisas: empilha o endereço da próxima instrução (o "endereço de retorno") e pula pro alvo. `ret` faz o oposto: desempilha um valor e pula pra esse endereço.
+
+Como a pilha é compartilhada, você precisa garantir que ela está **balanceada** quando der `ret`. Se sua função empilhou mais coisas e esqueceu de desempilhar, o `ret` vai pular pro lugar errado e seu programa pira.
+
+---
+
+## Loop com lodsb: a estrela do bootloader
+
+Você vai ver `lodsb` muito no OA. Ela faz três coisas numa instrução:
+
+1. Carrega o byte do endereço `DS:SI` em `AL`.
+2. Incrementa `SI` em 1 (ou decrementa, dependendo da flag de direção, mas a gente sempre incrementa).
+3. Pronto.
+
+É desenhada exatamente pra iterar sobre strings. O loop clássico de print:
+
+```nasm
+    movw $minha_string, %si    # ponteiro pra string em SI
+1:
+    lodsb                       # AL = *SI, SI++
+    orb %al, %al                # testa se AL é zero
+    jz 2f                       # se sim, sai
+    # ... usa AL (imprime, copia, o que for) ...
+    jmp 1b                      # volta
+2:
+```
+
+Tem variantes: `lodsw` (carrega word, 2 bytes), `lodsl` (carrega long, 4 bytes), e instruções complementares: `stosb` (escreve), `movsb` (copia de uma string pra outra). A gente usa as principais ao longo do OA.
+
+---
+
+## Interrupções: int
+
+Em Real Mode, `int` chama o BIOS. Em Protected Mode, chama handlers que você ou o sistema operacional configurou.
+
+```nasm
+movb $0x0E, %ah
+movb $'A', %al
+int $0x10               # chama o BIOS: imprime caractere
+```
+
+A interrupção tem um número (`$0x10`, `$0x13`, etc) que indexa a IVT (em Real Mode) ou a IDT (em Protected Mode). O processador salta pra rotina apontada por aquela entrada da tabela, executa, e quando ela termina, volta pra próxima instrução depois do `int`.
+
+Pra desabilitar todas as interrupções (importante na transição pra Protected Mode):
+
+```nasm
+cli                     # clear interrupt flag (desabilita)
+sti                     # set interrupt flag (habilita)
+```
+
+E pra "matar" o processador:
+
+```nasm
+hlt                     # halt: para até próxima interrupção
+```
+
+Combinado com `cli`, faz o processador parar definitivamente.
+
+---
+
+## I/O por portas: in e out
+
+Hardware moderno tem dois jeitos de ser acessado: memória mapeada (você lê/escreve em endereços de memória que correspondem a registradores do dispositivo) e portas de I/O (instruções específicas pra falar com controladores). O x86 historicamente usa muito portas de I/O.
+
+```nasm
+inb $0x92, %al          # lê 1 byte da porta 0x92 pra AL
+outb %al, $0x92         # escreve AL na porta 0x92
+```
+
+A porta `0x92` controla a A20 (você viu no capítulo do Stage 2). Outros números de porta importantes: `0x60` (teclado), `0x3D4`/`0x3D5` (cursor VGA), `0x70`/`0x71` (CMOS/RTC). Cada controlador documenta suas próprias portas.
+
+---
+
+## Diretivas: comandos pro assembler, não pro processador
+
+Diretivas começam com ponto e dão instruções **pro assembler**, não pro processador. Elas não geram código de máquina:
+
+```nasm
+.code16                 # próximas instruções são 16 bits
+.code32                 # próximas instruções são 32 bits
+.section .text          # próxima seção é código
+.section .data          # próxima seção é dado
+.globl _start           # exporta o símbolo _start
+.byte 0x42              # escreve o byte 0x42 aqui
+.word 0xAA55            # escreve 2 bytes (little-endian) aqui
+.long 0x12345678        # escreve 4 bytes
+.quad 0                 # escreve 8 bytes
+.asciz "olá"            # escreve a string + byte zero terminador
+.ascii "olá"            # escreve a string sem terminador
+.fill N, 1, 0           # escreve N bytes de valor 0
+.align 8                # alinha o próximo dado em múltiplo de 8
+```
+
+Diretivas são onde você controla layout do binário. `.code16` versus `.code32` é a diretiva mais importante pra esse OA: ela diz pro assembler como codificar as próximas instruções. Sem `.code16`, o assembler gera bytes pra 32 bits e seu boot sector não funciona.
+
+---
+
+## Exemplo completo: uma função idiomática
+
+Pra você ver tudo junto, esse é um exemplo realista de uma função que multiplica `AX` por 2 e retorna em `AX`:
+
+```nasm
+.code16
+.globl _start
+.section .text
+_start:
+    movw $10, %ax           # AX = 10
+    call dobrar             # AX = dobrar(AX)
+    # AX agora vale 20
+
+    jmp fim
+
+dobrar:
+    pusha                   # salva registradores
+    addw %ax, %ax           # AX = AX + AX (= AX * 2)
+    popa                    # restaura registradores
+    ret                     # volta pro caller
+
+fim:
+    cli
+    hlt
+```
+
+Tem duas armadilhas escondidas. Primeira: o `pusha`/`popa` salva e restaura todos os registradores, incluindo o `AX`. Então o `addw %ax, %ax` dentro da função realmente dobra `AX`, mas o `popa` restaura `AX` pro valor que tinha antes do `pusha`. A função, do jeito que está, **não retorna nada útil**.
+
+Pra realmente retornar um valor em `AX`, a função precisa não restaurar `AX`. Versão correta:
+
+```nasm
+dobrar:
+    addw %ax, %ax
+    ret
+```
+
+Sem `pusha`. Sem `popa`. A função "suja" o registrador `AX` por design, porque é onde está o resultado.
+
+Isso ilustra a tensão constante em Assembly: você tem total controle, mas também total responsabilidade. Não existe regra automática "argumentos vão em registrador X, retorno vai em Y". Você define convenções e segue. A convenção mais comum em x86 de 32 bits (chamada **cdecl**) é "argumentos via pilha, retorno em `EAX`", mas em bootloader a gente é mais livre.
+
+<DesignNote title="Por que Assembly não tem 'protótipo de função'?">
+Porque o processador não sabe o que é função. Funções são abstração de linguagens de alto nível. Em Assembly, "função" é só "endereço pra onde você salta com `call` e que termina com `ret`". O que vai em registrador, o que vai na pilha, qual registrador tem o retorno, tudo isso é combinação social entre quem escreve e quem chama. Se você quebrar a convenção, o programa quebra. Mas o assembler nunca vai te avisar.
+
+Por isso convenções de chamada (cdecl, stdcall, fastcall, System V AMD64) existem em código sério: pra ter contrato. No nosso OA, a gente é descontraído porque cada função tem um chamador conhecido. Em sistema operacional sério, isso é regulamentado por documento.
+
+</DesignNote>
+
+---
+
+## O que você não precisa saber agora
+
+Tem muita coisa em Assembly x86 que vou poupar você de ver. Lista curta do que **não** é necessário pra esse OA:
+
+- Instruções SIMD (`SSE`, `AVX`, `MMX`): pra processamento paralelo de dados, irrelevante em bootloader.
+- Operações de ponto flutuante (`FPU`, `x87`): bootloader não usa float.
+- Instruções de criptografia (`AES-NI`): também não.
+- Modo de 64 bits (`Long Mode`): a gente para em Protected Mode de 32 bits.
+- Modos de endereçamento exóticos (SIB byte, scale-index): só os modos simples.
+- `LOOP` e `LOOPNZ`: foram desenhados pra economizar bytes mas são lentos em CPUs modernas. A gente usa `dec/jnz` ou `cmp/jne`.
+- A maioria das instruções "string" além de `lodsb` e `stosb`.
+
+Se uma dessas aparecer um dia (e raramente vai), eu apresento ali. Por enquanto, esqueça que existem.
+
+---
+
+## Como você vai usar isso
+
+Ao longo do OA, você vai voltar nesse capítulo. Quando esbarrar numa instrução que não bate na memória, abre aqui, dá uma olhada, fecha. Não é decoreba. É referência.
+
+A diferença entre quem lê Assembly com fluência e quem trava em cada linha é a familiaridade com os **padrões**. `xorw %ax, %ax` é "zera AX". `pusha`/`popa` em volta de uma função é "preserva estado". `lodsb` em loop é "itera string". Com o tempo, você vê o padrão antes da instrução individual, como você lê palavras inteiras em português sem soletrar.
+
+Vai chegar. No começo, você lê devagar. Depois, lê normal.
+
+---
+
+## Exercícios
+
+<Challenge level={1}>
+**Warm-up.** Escreva mentalmente (ou no papel, ou num arquivo) o que cada uma dessas sequências faz:
+
+```nasm
+# (a)
+movw $5, %ax
+movw $3, %bx
+addw %bx, %ax
+```
+
+```nasm
+# (b)
+movw $0, %cx
+1:
+    incw %cx
+    cmpw $10, %cx
+    jne 1b
+```
+
+```nasm
+# (c)
+xorw %ax, %ax
+movw %ax, %ds
+```
+
+Se você consegue descrever em uma frase o que cada uma faz, você absorveu o capítulo. Se não consegue, releia a parte relevante. Sem culpa: Assembly tem curva.
+
+</Challenge>
+
+<Challenge level={2}>
+**Prática.** Implemente uma função `string_length` em Assembly que recebe um ponteiro pra string em `SI` e retorna o tamanho da string (sem contar o terminador zero) em `CX`. Use `lodsb` no loop.
+
+Esboço:
+
+```nasm
+string_length:
+    xorw %cx, %cx       # CX = 0 (contador)
+1:
+    lodsb               # AL = *SI++, SI avança
+    # ... testar AL ...
+    # ... incrementar CX ...
+    # ... voltar pro loop ...
+2:
+    ret
+```
+
+Preencha as partes faltantes. Teste mentalmente com uma string conhecida.
+
+</Challenge>
+
+<Challenge level={3}>
+**Desafio.** Escreva uma função `memcmp` em Assembly que recebe dois ponteiros (em `SI` e `DI`) e um tamanho (em `CX`), e retorna `0` em `AX` se os blocos de memória são iguais ou `1` se são diferentes.
+
+Você vai precisar de um loop que compara byte a byte. Use `cmpsb` (a instrução de string que compara o byte em `DS:SI` com o byte em `ES:DI` e avança ambos). Combinada com o prefixo `repe` (repete enquanto for igual), você pode fazer a comparação em poucas linhas.
+
+Pesquise `repe cmpsb` e veja como ele funciona. Esse é um exemplo de Assembly idiomático: o que poderia ser um loop de 6 instruções vira 1 prefixo + 1 instrução. Esses idiomas é o que separa Assembly amador de Assembly fluente. Não é fácil pegar de primeira, mas quando pega, fica.
+
+Se travar, é porque `repe cmpsb` envolve várias coisas ao mesmo tempo (flags, contadores, índices). Quebra em partes: primeiro entenda `cmpsb` sozinho, depois entenda o que `repe` faz, depois junta.
+
+</Challenge>
+
+---
+
+Você tem agora o vocabulário básico de Assembly x86. No próximo capítulo, vamos olhar a outra ferramenta principal: o C de kernel, que é diferente do C que você já viu. Depois disso, a Parte I termina, e você está pronto pra atacar a Parte II onde a coisa fica visualmente recompensadora. Mas a fundação que esses capítulos de nivelamento estão construindo é o que vai sustentar tudo. Quando o Stage 2 começar a fazer transição de modo no capítulo 6, você vai estar lendo o Assembly como prosa, não como hieróglifo.
+
+<footer className="flex justify-between">
+  <a
+    href="/posts/bootloader-na-pratica/parte-1/2-tooling"
+    className="flex items-center gap-2 hover:cursor-pointer no-underline"
+  >
+    <ArrowLeft />
+    Capítulo anterior
+  </a>
+  <a
+    href=""
+    className="flex items-center gap-2 hover:cursor-pointer no-underline"
+  >
+    Próximo capítulo
+    <ArrowRight />
+  </a>
+</footer>

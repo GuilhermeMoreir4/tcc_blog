@@ -1,0 +1,394 @@
+import If from "@/components/conditional_component.tsx";
+import DesignNote from "@/components/DesignNote.tsx";
+import Challenge from "@/components/Challenge.tsx";
+import { ArrowLeft, ArrowRight } from "lucide-react";
+
+export const metadata = {
+  title: "2. A oficina: ferramentas pra construir um sistema operacional",
+  description:
+    "GCC, GAS, ld, QEMU, Parede de Carne, Makefile. As ferramentas que vão te acompanhar pelo OA inteiro, montadas com calma antes do primeiro byte de código.",
+  date: "2026-05-10T12:00:00Z",
+  tags: ["GAS", "GCC", "ld", "QEMU", "Make", "Ferramentas"],
+};
+
+Em _Fundação_, Hari Seldon não começa a Fundação plantando colônias. Ele começa montando a Enciclopédia Galáctica. Décadas antes de qualquer evento dramático, gente que ninguém nunca mais vai lembrar está organizando arquivos, padronizando processos, instalando equipamento numa lua perdida do canto da galáxia. O drama da série não acontece sem esse trabalho silencioso de fundação. A própria palavra "fundação" significa isso: o que você não vê, mas sem o que nada se sustenta.
+
+Esse é o capítulo da fundação do seu OA. Não tem código de bootloader aqui. Não tem Real Mode, não tem GDT. Tem ferramenta. Tem ambiente. Tem o tipo de coisa que parece chato no começo e que evita 90% das frustrações nos próximos capítulos.
+
+Eu poderia ter pulado essa parte. Muito tutorial de bootloader na internet pula. Você instala umas coisas, copia uns comandos, e quando algo quebra, fica perdido porque não sabe o que cada peça faz. Aqui a gente vai com calma. No fim, você vai ter a oficina inteira montada e vai entender por que cada ferramenta está ali.
+
+---
+
+## O que a gente vai construir, em uma frase
+
+Pra que a oficina faça sentido, vale ter clareza do produto final. Você vai construir, ao longo desse OA, um sistema operacional minúsculo chamado SeldonOS. Ele cabe num arquivo de imagem de disco de 1.44 MB e roda num navegador através do **Parede de Carne**, o emulador embutido no próprio site. Vai ter um boot sector, um Stage 2, um kernel em C, e vai imprimir mensagens na tela rodando em Protected Mode de 32 bits.
+
+Pra produzir esse arquivo de imagem de disco, você vai precisar de uma cadeia de ferramentas que faz, em ordem:
+
+1. **Montagem** do Assembly em código objeto (Stage 1 e Stage 2).
+2. **Compilação** do C em código objeto (kernel).
+3. **Linkagem** dos objetos em binários crus.
+4. **Concatenação** dos binários numa imagem de disco.
+5. **Execução** dessa imagem num emulador.
+
+Cada passo tem uma ferramenta. Vamos conhecer todas.
+
+---
+
+## GAS: o GNU Assembler
+
+A ferramenta que monta Assembly em código de máquina é o **GAS** (GNU Assembler), invocado pelo comando `as`. Ele é parte do **binutils**, um conjunto de ferramentas de baixo nível que toda distribuição Linux séria já vem com instalado.
+
+Existem várias formas de escrever Assembly x86, mas as duas grandes famílias são:
+
+- **Sintaxe Intel** (usada pelo NASM, MASM, e na maioria da documentação da Intel).
+- **Sintaxe AT&T** (usada pelo GAS, GDB, e em todo o ecossistema GNU/Linux histórico).
+
+A gente vai usar **AT&T**. Não é uma escolha de preferência pessoal: é uma escolha de coerência com o ecossistema. Se você for usar GDB pra debugar (e vai), ele mostra Assembly em AT&T. Se você for ler código do kernel do Linux, é AT&T. Se você for compilar C com GCC e olhar o Assembly gerado, é AT&T por padrão. Pular pra Intel só pra escrever bootloader e voltar pra AT&T pra todo o resto é cansativo.
+
+Pra você sentir a diferença, esse é o mesmo código nas duas sintaxes:
+
+```gas
+# Sintaxe AT&T (a nossa)
+movw $0x1234, %ax
+movw %ax, %bx
+addl $4, %ebx
+```
+
+```nasm
+; Sintaxe Intel (NÃO vamos usar)
+mov ax, 0x1234
+mov bx, ax
+add ebx, 4
+```
+
+As diferenças principais:
+
+- **Ordem dos operandos**: AT&T é `origem, destino`. Intel é `destino, origem`. Se você confundir, vai escrever em vez de ler e vice-versa, e seus bugs vão ser bizarros.
+- **Prefixos**: AT&T usa `%` pra registradores e `$` pra valores imediatos. Intel não usa nada.
+- **Sufixos**: AT&T usa `b` (byte, 8 bits), `w` (word, 16 bits), `l` (long, 32 bits), `q` (quadword, 64 bits) no fim das instruções pra indicar tamanho. Intel deduz pelo tamanho do registrador.
+
+Decora a ordem `origem, destino` agora. Vai te economizar horas de debug.
+
+<DesignNote title="Por que a sintaxe AT&T tem fama de feia">
+  Porque ela é feia. O `$` antes de imediatos é redundante quando o contexto já
+  deixa claro, o `%` antes de registradores polui visualmente, e a ordem
+  `origem, destino` é o oposto do que matemática e atribuição em linguagens de
+  alto nível usam (`x = 5` é "destino = origem"). A sintaxe AT&T nasceu em
+  ambientes Unix dos anos 70 onde o assembler precisava lidar com várias
+  arquiteturas, e os prefixos ajudavam o parser a não se enrolar. Hoje é dívida
+  histórica. Mas adotar agora te poupa de manter dois dialetos na cabeça. Aceite
+  a feiura, ganhe a consistência.
+</DesignNote>
+
+Pra montar um arquivo `.s` em um objeto, o comando é:
+
+```bash
+as --32 -o saida.o entrada.s
+```
+
+A flag `--32` força a saída em formato de 32 bits (mesmo em máquinas 64 bits modernas), que é o que a gente precisa pro bootloader. Sem ela, o `as` tenta gerar código de 64 bits e dá errado.
+
+---
+
+## ld: o linker
+
+Depois de montar Assembly, você tem um arquivo objeto. Mas objeto não é executável: tem cabeçalho ELF, referências externas, seções flutuantes. Pra virar código rodável, precisa passar pelo **linker**, que no GNU é o `ld`.
+
+O `ld` faz três coisas que importam pra gente:
+
+1. **Define endereços absolutos.** O assembler trabalha com offsets relativos. O linker decide "esse código vai morar em `0x7C00`" e ajusta todas as referências.
+2. **Resolve símbolos.** Se seu Stage 1 chama uma função `print_string`, o linker garante que a chamada aponta pro endereço certo da função.
+3. **Produz a saída no formato desejado.** ELF, binário cru, COFF. Pra bootloader a gente quer binário cru, sem cabeçalho.
+
+O comando típico que a gente vai usar:
+
+```bash
+ld -m elf_i386 -Ttext 0x7C00 --oformat=binary -o saida.bin entrada.o
+```
+
+Vamos pelos flags:
+
+- `-m elf_i386` força modo 32 bits Intel.
+- `-Ttext 0x7C00` diz "a seção `.text` (código) começa em `0x7C00`". Esse é o endereço onde o BIOS vai carregar o boot sector, então o linker resolve referências como se o código fosse rodar daí.
+- `--oformat=binary` produz binário cru. Sem cabeçalho ELF, sem metadados, só os bytes do código.
+- `-o saida.bin` é o nome do arquivo de saída.
+
+Se você esquecer o `--oformat=binary` e deixar o `ld` produzir ELF padrão, seu boot sector vai ter um cabeçalho de algumas centenas de bytes na frente do código real. O BIOS vai tentar executar o cabeçalho como instrução, e seu computador virtual vai morrer com uma morte estranha. Já me aconteceu. Frustrante.
+
+---
+
+## GCC: o compilador
+
+Pro kernel em C, a gente usa o **GCC**, o GNU Compiler Collection. Mas não o GCC do jeito que você está acostumado a usar pra programas comuns. A gente usa em modo **freestanding**.
+
+A diferença é grande. Quando você compila um programa C normal:
+
+```bash
+gcc programa.c -o programa
+```
+
+O GCC junta seu código com a libc (biblioteca padrão do C), com o runtime do sistema operacional (que prepara `main`, configura stdin/stdout, etc), com várias outras coisas que você não vê. O resultado é um executável que assume que tem um sistema operacional embaixo dele.
+
+Pro kernel, você **é** o sistema operacional. Não tem libc. Não tem `main` chamado por um runtime. Não tem `printf`. Quem inicia o kernel é o Stage 2 com um `call`. O kernel é freestanding.
+
+O comando vira:
+
+```bash
+gcc -ffreestanding -m32 -fno-pie -nostdlib -c kernel.c -o kernel.o
+```
+
+Os flags importam:
+
+- `-ffreestanding` diz "não assuma que existe libc, não inclua headers automáticos". Isso desabilita certas otimizações que dependem de funções como `memcpy` existirem.
+- `-m32` força código de 32 bits.
+- `-fno-pie` desabilita position-independent code. Kernels têm endereço fixo (a gente decide onde eles moram), então PIC só atrapalha.
+- `-nostdlib` (na linkagem) diz pro linker não juntar a libc.
+- `-c` significa "compile, mas não linke". Produz `.o`, não executável.
+
+Pra linkar o kernel em binário cru:
+
+```bash
+ld -m elf_i386 -T kernel.ld --oformat=binary -o kernel.bin kernel.o
+```
+
+Aqui o `-T kernel.ld` substitui o linker script padrão pelo nosso. Vamos ver linker scripts no capítulo de C de kernel.
+
+---
+
+## QEMU: o emulador de verdade
+
+O **Parede de Carne** (nosso v86 embutido no site) é maravilhoso pra você rodar o SeldonOS rapidinho e ver o resultado. Mas pra debugar bug feio, ele não te dá ferramentas. Quando algo trava em Protected Mode e você não sabe por quê, você quer um **emulador com GDB anexado**.
+
+Esse é o **QEMU**.
+
+O QEMU é um emulador de máquina completo. Você dá uma imagem de disco pra ele, e ele simula um computador inteiro: CPU, memória, disco, teclado, vídeo. Mas o pulo do gato é que ele aceita anexar o GDB. Você roda:
+
+```bash
+qemu-system-i386 -drive format=raw,file=disk.img -s -S
+```
+
+Os flags:
+
+- `-drive format=raw,file=disk.img` carrega seu disco.
+- `-s` é atalho pra `-gdb tcp::1234`, ou seja, abre uma porta GDB.
+- `-S` (S maiúsculo) faz o QEMU parar logo no primeiro ciclo de CPU e esperar você mandar continuar.
+
+Em outro terminal, você roda:
+
+```bash
+gdb
+(gdb) target remote :1234
+(gdb) break *0x7C00
+(gdb) continue
+```
+
+E o GDB vai parar exatamente quando o processador chegar em `0x7C00`, ou seja, na primeira instrução do seu Stage 1. A partir daí você pode dar `stepi` (step instruction), olhar registradores com `info registers`, inspecionar memória com `x/16x 0x7C00`. É o nível de visibilidade que separa "consegui fazer funcionar por sorte" de "entendi por que funciona".
+
+A gente não vai usar o QEMU em toda hora. O Parede de Carne resolve 90% dos casos. Mas quando travar bonito, abre o QEMU.
+
+<DesignNote title="QEMU versus Parede de Carne">
+O Parede de Carne é o v86, um emulador x86 escrito em JavaScript que roda no navegador. Ele é rápido, didático, e tem a vantagem absurda de você ver o resultado sem sair da página. Mas ele simplifica algumas coisas (especialmente em torno de timers e interrupções), então código que funciona nele pode não funcionar em hardware real ou no QEMU.
+
+O QEMU é "hardware real" no sentido de simulação. Se rodar no QEMU, vai rodar num PC. Ele é mais pesado, exige instalação, mas é a referência. Use ele pra validar antes de declarar vitória.
+
+</DesignNote>
+
+---
+
+## Make: orquestrando o caos
+
+Você não vai querer digitar manualmente todos esses comandos a cada mudança. Especialmente quando o projeto cresce, com 5, 10, 20 arquivos. A solução é o **Make**, uma ferramenta antiga e robusta que executa comandos baseados em regras.
+
+O arquivo se chama `Makefile`. Cada regra tem o formato:
+
+```makefile
+alvo: dependências
+    comando
+```
+
+A indentação tem que ser **tab**, não espaços. Make é dos anos 70 e essa decisão foi tomada quando tab era fashion. Vive disso até hoje.
+
+Pra nosso projeto, um Makefile inicial seria:
+
+```makefile
+AS = as
+LD = ld
+GCC = gcc
+QEMU = qemu-system-i386
+
+ASFLAGS = --32
+LDFLAGS = -m elf_i386
+CFLAGS = -ffreestanding -m32 -fno-pie -nostdlib -c
+
+all: disk.img
+
+stage1.bin: stage1.s
+    $(AS) $(ASFLAGS) -o stage1.o stage1.s
+    $(LD) $(LDFLAGS) -Ttext 0x7C00 --oformat=binary -o stage1.bin stage1.o
+
+stage2.bin: stage2.s
+    $(AS) $(ASFLAGS) -o stage2.o stage2.s
+    $(LD) $(LDFLAGS) -Ttext 0x7E00 --oformat=binary -o stage2.bin stage2.o
+
+kernel.bin: kernel.c kernel.ld
+    $(GCC) $(CFLAGS) kernel.c -o kernel.o
+    $(LD) $(LDFLAGS) -T kernel.ld --oformat=binary -o kernel.bin kernel.o
+
+disk.img: stage1.bin stage2.bin kernel.bin
+    cat stage1.bin stage2.bin kernel.bin > disk.img
+    truncate -s 1474560 disk.img
+
+run: disk.img
+    $(QEMU) -drive format=raw,file=disk.img
+
+debug: disk.img
+    $(QEMU) -drive format=raw,file=disk.img -s -S
+
+clean:
+    rm -f *.o *.bin disk.img
+
+.PHONY: all run debug clean
+```
+
+A primeira parte define variáveis (`AS`, `LD`, etc) que vão ser substituídas onde aparecem com `$(...)`.
+
+Depois vêm as regras. Cada `alvo: dependências` significa "se algum arquivo das dependências for mais novo que o alvo, execute os comandos". O Make é inteligente: se você só mexer no `stage1.s`, ele só remonta o Stage 1.
+
+A regra `all: disk.img` é a padrão (a primeira regra do arquivo). Se você só rodar `make`, ele constrói `disk.img`. Pra rodar no QEMU, `make run`. Pra debug, `make debug`. Pra limpar, `make clean`.
+
+O `.PHONY: all run debug clean` é uma marca dizendo "esses alvos não correspondem a arquivos reais". Sem isso, se por acaso existir um arquivo chamado `clean` no diretório, o Make ficaria confuso.
+
+---
+
+## Configurando o ambiente
+
+Tudo isso precisa estar instalado. Em distribuições baseadas em Debian (Ubuntu, Mint, Pop!\_OS):
+
+```bash
+sudo apt update
+sudo apt install build-essential binutils gcc-multilib qemu-system-x86 gdb make
+```
+
+Em distribuições baseadas em Red Hat (Fedora, RHEL):
+
+```bash
+sudo dnf install gcc binutils glibc-devel.i686 qemu-system-x86 gdb make
+```
+
+No Arch:
+
+```bash
+sudo pacman -S base-devel qemu-system-x86 gdb
+```
+
+No macOS (com Homebrew):
+
+```bash
+brew install x86_64-elf-gcc x86_64-elf-binutils qemu
+```
+
+No Mac, atenção: as ferramentas vêm prefixadas com `x86_64-elf-`, então no Makefile você precisa trocar `AS = as` por `AS = x86_64-elf-as`, e assim por diante. Esse é o "cross compiler", porque o macOS por padrão não tem ferramentas que geram código para Linux/freestanding x86.
+
+No Windows: use WSL (Windows Subsystem for Linux). Tentar fazer isso no Windows nativo é dor desnecessária.
+
+<If condition={false}>
+  Se você é completamente novo em Unix-like ambientes, esse capítulo pode estar
+  te confundindo. Se for o caso, dê uma pausa, aprenda o básico de terminal
+  (`cd`, `ls`, `mkdir`, `cat`, edição de arquivos com `nano` ou `vim`), e volta
+  aqui. O OA pressupõe que você sabe se mexer no terminal. Não precisa ser
+  sysadmin, mas precisa não ter medo da tela preta.
+</If>
+
+---
+
+## Estrutura de diretórios sugerida
+
+A organização do projeto importa. Sugestão:
+
+```
+seldonos/
+├── Makefile
+├── stage1.s
+├── stage2.s
+├── kernel.c
+├── kernel.ld
+├── build/        # arquivos .o e .bin temporários
+└── README.md
+```
+
+Você pode adaptar o Makefile pra colocar os arquivos intermediários em `build/` (mais limpo), ou deixar tudo na raiz mesmo (mais simples). Pro começo do OA, simples é melhor.
+
+À medida que o projeto cresce, vai ficar útil separar em mais arquivos: `vga.c` pra rotinas de tela, `string.c` pra utilitários de string, `kernel.c` só pra função principal. Isso vem naturalmente. Não premature optimize.
+
+---
+
+## O fluxo de trabalho real
+
+Como vai ser sua vida no dia a dia desse OA?
+
+1. Você abre seu editor (VS Code, Vim, Emacs, o que for) com o diretório do projeto.
+2. Modifica um arquivo (digamos, `stage1.s`).
+3. Roda `make` no terminal. Ele detecta que só `stage1.s` mudou, remonta o Stage 1, recria a `disk.img`.
+4. Roda `make run` (se quiser ver no QEMU) ou abre o Parede de Carne no navegador e carrega o `disk.img`.
+5. Vê o resultado. Se algo está errado, volta pro editor.
+
+Esse ciclo dura uns 10 segundos quando você se acostuma. É rápido. É o que torna esse tipo de programação viciante: você muda, vê, muda, vê. O feedback é imediato.
+
+Compare com o tempo de feedback de outros tipos de projeto. Um deploy de aplicação web pode levar minutos. Um teste de unidade pode levar segundos, mas você ainda precisa rodar manualmente. Bootloader é literalmente "salva o arquivo, dá `make run`, vê o pixel mudar". Você tá perto do hardware, e perto também significa rápido.
+
+---
+
+## Por que isso tudo vai funcionar
+
+Você pode estar olhando essa lista de ferramentas (GAS, ld, GCC, QEMU, Make) e pensando "nossa, é muita coisa". É verdade que tem volume. Mas cada peça tem um trabalho bem específico, e nenhuma delas é proprietária ou cara. É uma cadeia open source que existe há décadas, que foi usada pra construir o Linux, o GCC, o Git, e basicamente toda infraestrutura crítica do mundo.
+
+Quando você terminar esse OA, vai ter familiaridade com ferramentas que valem ouro em qualquer carreira de sistemas. Programadores que sabem usar GCC freestanding e GDB de baixo nível são raros porque pouco curso ensina. Você não está aprendendo só sobre bootloader. Está aprendendo a oficina inteira.
+
+Cada capítulo daqui em diante vai assumir que a oficina está montada. Se algo der errado no `make` ao longo do OA, releia esse capítulo. A culpa raramente vai estar no código que você escreveu.
+
+---
+
+## Exercícios
+
+<Challenge level={1}>
+**Warm-up.** Crie um arquivo `hello.c` que use `printf` pra imprimir "Hello world", compile com `gcc hello.c -o hello` (compilação normal, **não** freestanding), rode e veja o resultado. Depois compile o mesmo arquivo com `gcc -ffreestanding -nostdlib hello.c -o hello`. O que acontece?
+
+Spoiler: o segundo comando falha. Por quê? Você acabou de descobrir empiricamente o que `-ffreestanding -nostdlib` significa: "sem libc, sem `printf`, vira-te". Esse erro é o ambiente do kernel. Você vai conviver com ele.
+
+</Challenge>
+
+<Challenge level={2}>
+**Prática.** Escreva um arquivo Assembly minúsculo (qualquer coisa, nem precisa fazer sentido como programa) e use o `as --32` pra montar. Depois use `objdump -d arquivo.o` (parte do binutils) pra **desmontar** o objeto e ver o código de máquina gerado. Compare o Assembly que você escreveu com os bytes hexadecimais que aparecem.
+
+Esse exercício te dá uma sensação concreta da relação Assembly ↔ código de máquina. Você vai ver que cada linha de Assembly vira 1 a 6 bytes de instrução real. É a primeira vez que o "código de máquina" deixa de ser abstração e vira número.
+
+</Challenge>
+
+<Challenge level={3}>
+**Desafio.** Crie um Makefile que compile o `hello.c` do exercício 1, mas com uma lógica interessante: se a variável `MODE` for definida como `freestanding`, ele compila com `-ffreestanding -nostdlib`. Se for `normal`, compila normal. Uso esperado: `make MODE=normal` ou `make MODE=freestanding`.
+
+Pra resolver, você vai precisar pesquisar **variáveis condicionais no Make** (`ifeq`, `else`, `endif`). Não é trivial pra quem nunca usou. Se travar, o Makefile do nosso projeto é mais simples que isso, então não estresse. Mas se conseguir, você vai ter aprendido um truque que vale por anos: Makefiles parametrizados são uma das ferramentas mais úteis de qualquer projeto C/C++ sério.
+
+</Challenge>
+
+---
+
+A oficina está montada. Você tem assembler, compilador, linker, emulador, debugger e orquestrador. Tudo que vem a seguir é construir em cima dessa base. No próximo capítulo, a gente vai estabelecer o segundo pilar do nivelamento: o subset de Assembly x86 que importa pra esse OA. Vai ser revisão pra quem viu na faculdade, e vai ser introdução pra quem não viu, mas em qualquer caso vai te deixar pronto pra olhar o Stage 1 no capítulo 4 da Parte II sem ficar consultando referência a cada linha.
+
+<footer className="flex justify-between">
+  <a
+    href="/posts/bootloader-na-pratica/parte-1/1-introduction"
+    className="flex items-center gap-2 hover:cursor-pointer no-underline"
+  >
+    <ArrowLeft />
+    Capítulo anterior
+  </a>
+  <a
+    href="/posts/bootloader-na-pratica/parte-1/3-assembly-x86"
+    className="flex items-center gap-2 hover:cursor-pointer no-underline"
+  >
+    Próximo capítulo
+    <ArrowRight />
+  </a>
+</footer>
