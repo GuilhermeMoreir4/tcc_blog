@@ -13,6 +13,47 @@ declare global {
 type BootState = "booting" | "ready";
 type ResizeEdge = "e" | "s" | "se" | null;
 
+const DB_NAME = "vm-state-db";
+const DB_STORE = "states";
+const DB_KEY = "alpine-boot";
+
+function openDB(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = () => req.result.createObjectStore(DB_STORE);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function loadState(): Promise<ArrayBuffer | null> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(DB_STORE, "readonly");
+      const get = tx.objectStore(DB_STORE).get(DB_KEY);
+      get.onsuccess = () => resolve(get.result ?? null);
+      get.onerror = () => resolve(null);
+    });
+  } catch {
+    return null;
+  }
+}
+
+async function saveState(buffer: ArrayBuffer): Promise<void> {
+  try {
+    const db = await openDB();
+    return new Promise((resolve) => {
+      const tx = db.transaction(DB_STORE, "readwrite");
+      tx.objectStore(DB_STORE).put(buffer, DB_KEY);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => resolve();
+    });
+  } catch {
+    // ignore
+  }
+}
+
 const ICON_SIZE = 52;
 const MIN_W = 320;
 const MIN_H = 200;
@@ -163,21 +204,26 @@ export default function VMWidget() {
   useEffect(() => {
     if (initialized.current) return;
 
-    const startEmulator = () => {
+    const startEmulator = async () => {
       if (!window.V86 || initialized.current || !screenRef.current) return;
       initialized.current = true;
 
-      let prog = 0;
-      progressTimer.current = setInterval(() => {
-        prog = Math.min(prog + 1, 70);
-        setBootProgress(prog);
-        if (prog >= 70) {
-          clearInterval(progressTimer.current!);
-          progressTimer.current = null;
-        }
-      }, 200);
+      const savedState = await loadState();
 
-      window.vmEmulator = new window.V86({
+      // With a saved state, boot is instant — skip the fake progress timer
+      if (!savedState) {
+        let prog = 0;
+        progressTimer.current = setInterval(() => {
+          prog = Math.min(prog + 1, 70);
+          setBootProgress(prog);
+          if (prog >= 70) {
+            clearInterval(progressTimer.current!);
+            progressTimer.current = null;
+          }
+        }, 200);
+      }
+
+      const options: Record<string, unknown> = {
         wasm_path: "/v86.wasm",
         screen_container: screenRef.current,
         bios: { url: "/bios/seabios.bin" },
@@ -198,16 +244,29 @@ export default function VMWidget() {
           size: 1073741824,
         },
         autostart: true,
-      });
+      };
+
+      if (savedState) {
+        options.initial_state = { buffer: savedState };
+      }
+
+      window.vmEmulator = new window.V86(options);
 
       window.vmEmulator.add_listener("emulator-ready", () => {
         if (progressTimer.current) {
           clearInterval(progressTimer.current);
           progressTimer.current = null;
         }
-        setBootProgress(85);
+        if (savedState) {
+          // State restored — already at login prompt
+          setBootProgress(100);
+          setBootState("ready");
+        } else {
+          setBootProgress(85);
+        }
       });
 
+      let stateSaved = false;
       window.vmEmulator.add_listener("serial0-output-byte", (byte: number) => {
         serialBuf.current += String.fromCharCode(byte);
         if (serialBuf.current.length > 512)
@@ -218,6 +277,14 @@ export default function VMWidget() {
         ) {
           setBootProgress(100);
           setBootState("ready");
+
+          // Save state once after first successful boot
+          if (!stateSaved) {
+            stateSaved = true;
+            window.vmEmulator.save_state((err: unknown, state: ArrayBuffer) => {
+              if (!err) saveState(state);
+            });
+          }
         }
       });
     };
