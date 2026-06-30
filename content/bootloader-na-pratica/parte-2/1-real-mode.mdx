@@ -1,0 +1,259 @@
+import If from "@/components/conditional_component.tsx";
+import Testing from "@/components/testing.tsx";
+import DesignNote from "@/components/DesignNote.tsx";
+import { Button } from "@/components/ui/button";
+import Challenge from "@/components/Challenge.tsx";
+import ChapterNav from "@/components/ChapterNav.tsx";
+
+export const metadata = {
+  title: "4. O mundo do Real Mode",
+  description: "Segmentação, segment:offset, os primeiros 1MB e a IVT. A herança que ninguém pediu mas todo mundo carrega.",
+  date: "2026-03-13T12:00:00Z",
+  tags: ["Assembly", "Real Mode", "Segmentação", "Hardware"],
+};
+
+# O mundo do Real Mode
+
+Em *Frankenstein*, a criatura nasce de partes que não foram desenhadas para conviver. Pernas de um cadáver, braços de outro, um cérebro qualquer, e tudo costurado com a esperança de que aquilo ande. Funciona, mas cada passo carrega o peso da decisão de não jogar nada fora. Você vai ver isso de novo aqui. O Real Mode é a criatura. A Intel é o Victor. E nós, em pleno 2026, ainda apertamos o botão de ligar e acordamos esse troço, porque ninguém teve coragem de cortar os fios.
+
+Esse capítulo é sobre entender onde seu computador vive nos primeiros milissegundos depois que você liga ele. Não como uma curiosidade histórica que você decora pra prova. Como o terreno onde seu Stage 1 vai pisar. Você não pode escrever um bootloader sem entender Real Mode, do mesmo jeito que você não pode escalar uma montanha sem saber se o chão é gelo ou rocha.
+
+No fim, você vai ter rodado um programinha que lê bytes de endereços específicos da memória e mostra na tela. Vai ser feio. Vai ser pequeno. Mas vai ser **seu**, e vai te mostrar a memória do jeito que ela é nesse modo: crua, segmentada, e estranhamente próxima.
+
+---
+
+## 1978: o pecado original
+
+Em 1978 a Intel lançou o 8086. Ele tinha registradores de 16 bits, o que significa que com um único registrador você consegue endereçar no máximo 64 KB de memória (2 elevado a 16). Isso era pouco até pra época. O concorrente Motorola estava prestes a lançar o 68000 com 32 bits de verdade e endereçamento linear de 16 MB. A Intel queria mais memória, mas não queria registradores maiores, porque registradores maiores significam transistores maiores, e transistores maiores em 1978 significavam um chip mais caro e mais lento.
+
+Então eles fizeram a coisa que a engenharia faz quando não pode resolver o problema de frente: deram a volta.
+
+Inventaram a **segmentação**. A ideia é que todo endereço de memória não é um número só. É dois números: um **segmento** e um **offset**. Você fala "vai pro segmento 0x1000, offset 0x0042" e o processador combina os dois pra formar o endereço final. Com isso, com dois registradores de 16 bits, você consegue endereçar até 1 MB de memória (2 elevado a 20). Cabe na restrição de transistores. Sai mais barato.
+
+Você acabou de ler a justificativa. Aceite que ela faz sentido em 1978. Agora vamos ver por que ela te assombra em 2026.
+
+<DesignNote title="Por que 1 MB e não 2 MB?">
+A conta exata é assim: o segmento é um valor de 16 bits, deslocado 4 bits pra esquerda (multiplicado por 16), somado a um offset de 16 bits. O maior endereço possível é então 0xFFFF * 16 + 0xFFFF = 0x10FFEF, que é um pouquinho mais que 1 MB. Esse "pouquinho a mais" virou um bug famoso chamado A20 line, que você vai conhecer no capítulo 6. Por enquanto, guarde só isso: a Intel não escolheu 1 MB. Ela escolheu segmentos de 16 bits, e 1 MB foi o que sobrou da matemática.
+</DesignNote>
+
+---
+
+## Segmento dois pontos offset
+
+A notação que você vai ver pelo resto da sua vida em código x86 é `segmento:offset`. Algo como `0x07C0:0x0000` ou `0x0000:0x7C00`. Aqui vai a parte que assusta o iniciante: **esses dois endereços apontam pro mesmo lugar**.
+
+A fórmula é:
+
+```
+endereço físico = segmento * 16 + offset
+```
+
+Vamos fazer a conta:
+
+```
+0x07C0 * 16 + 0x0000 = 0x7C00 + 0 = 0x7C00
+0x0000 * 16 + 0x7C00 = 0 + 0x7C00 = 0x7C00
+```
+
+Mesmo lugar. O endereço físico final é `0x7C00`, que por acaso é exatamente onde o BIOS carrega seu boot sector. Você vai memorizar esse número antes de terminar esse OA.
+
+Pense assim: o segmento é o CEP, o offset é o número da casa. Você pode descrever a mesma casa de mil maneiras. "Rua das Flores, 100" é o mesmo lugar que "Rua das Flores km 0, casa 100", que é o mesmo lugar que "Avenida Anterior km 1, recuo 100". Endereços diferentes, casa idêntica. A Intel deu pra você infinitas maneiras de falar do mesmo byte. Isso é poderoso e perverso ao mesmo tempo.
+
+---
+
+## Os registradores de segmento
+
+O processador tem registradores especiais só pra guardar segmentos. Eles são quatro no Real Mode original:
+
+- `CS` (Code Segment): segmento onde mora o código que está executando.
+- `DS` (Data Segment): segmento onde moram os dados que você está lendo e escrevendo.
+- `ES` (Extra Segment): um segmento extra pra quando você precisa de dois lugares ao mesmo tempo.
+- `SS` (Stack Segment): segmento da pilha.
+
+Quando o processador busca a próxima instrução, ele combina `CS` com o registrador `IP` (instruction pointer). Quando ele lê uma variável, combina `DS` com o offset que você passou. Quando empilha algo, combina `SS` com `SP`. Toda referência de memória, sempre, é segmento mais offset. Não tem como escapar.
+
+Vai ter um momento, lá no Stage 1, em que você vai escrever isso:
+
+```nasm
+xorw %ax, %ax
+movw %ax, %ds
+movw %ax, %es
+movw %ax, %ss
+```
+
+A primeira linha zera o registrador `AX` (xor de qualquer coisa com ela mesma sempre dá zero, e essa é a forma mais barata de zerar um registrador no x86). Depois copia esse zero pra `DS`, `ES` e `SS`. Você está dizendo pro processador: "todos os meus segmentos começam no endereço 0". A partir desse ponto, todo offset que você usar vai ser interpretado a partir do byte zero da memória.
+
+Por que zerar? Porque o BIOS te entrega o computador num estado onde você não sabe direito o que esses segmentos contêm. Pode ser qualquer coisa. Zerar é o primeiro ato de soberania do seu bootloader: "agora quem manda aqui sou eu".
+
+---
+
+## O mapa dos primeiros 1 MB
+
+Em Real Mode, você tem 1 MB pra trabalhar. E mesmo isso é mentira, porque grande parte desse 1 MB já está reservado pra coisas que você não controla. Aqui está o mapa:
+
+```
+0x00000  ┌────────────────────────────────┐
+         │  IVT (Interrupt Vector Table)  │  1 KB
+0x00400  ├────────────────────────────────┤
+         │  BIOS Data Area                │  256 bytes
+0x00500  ├────────────────────────────────┤
+         │                                │
+         │  Memória livre                 │  ~30 KB
+         │                                │
+0x07C00  ├────────────────────────────────┤
+         │  Seu boot sector (512 bytes)   │  ← Você está aqui
+0x07E00  ├────────────────────────────────┤
+         │                                │
+         │  Memória livre                 │  ~480 KB
+         │                                │
+0x9FC00  ├────────────────────────────────┤
+         │  Extended BIOS Data Area       │
+0xA0000  ├────────────────────────────────┤
+         │  VGA video memory              │
+0xB8000  ├────────────────────────────────┤
+         │  VGA text mode buffer          │  ← Capítulo 7
+0xC0000  ├────────────────────────────────┤
+         │  ROMs de placas (BIOS de VGA)  │
+0xF0000  ├────────────────────────────────┤
+         │  ROM do BIOS                   │
+0xFFFFF  └────────────────────────────────┘
+```
+
+Olha pra esse mapa por uns segundos. É o seu mundo.
+
+A região de `0x00000` a `0x00400` é a **IVT**, a Tabela de Vetores de Interrupção. Cada interrupção (`int 0x10`, `int 0x13`, `int 0x16`, etc) tem uma entrada de 4 bytes ali, dizendo onde está a rotina que trata aquela interrupção. Quando você chamar `int 0x10`, o processador vai ler o endereço da posição `0x10 * 4 = 0x40` da IVT e pular pra lá. É assim que o BIOS te oferece serviços: ele preencheu a IVT com ponteiros pras rotinas dele antes de te entregar o controle.
+
+A região `0xB8000` é a **memória de texto da VGA**. Cada caractere na tela é um par de bytes ali. Você vai escrever direto nessa região no capítulo 7, quando deixar o BIOS pra trás.
+
+E o seu boot sector? Mora em `0x7C00`. Por quê? Porque o IBM PC original tinha 32 KB de RAM, o BIOS precisava de espaço pra trabalhar, e `0x7C00` deixava 1 KB livre antes da memória acabar. Foi uma decisão de engenharia em 1981 que a gente carrega até hoje.
+
+---
+
+## A IVT, o cardápio do BIOS
+
+A Tabela de Vetores de Interrupção é o que torna o Real Mode utilizável. Sem ela, você teria que escrever drivers pra teclado, vídeo e disco antes de poder fazer qualquer coisa. Com ela, o BIOS te entrega um cardápio pronto.
+
+As interrupções que importam pro nosso bootloader são poucas:
+
+- **`int 0x10`**: serviços de vídeo. Imprimir caractere, mudar cor, limpar tela.
+- **`int 0x13`**: serviços de disco. Ler setores, escrever setores.
+- **`int 0x16`**: serviços de teclado. Ler tecla pressionada.
+- **`int 0x19`**: rebootar carregando o boot sector de novo.
+
+Você vai usar `int 0x10` no capítulo 3 pra imprimir sua primeira mensagem. Vai usar `int 0x13` no capítulo 4 pra ler o Stage 2 do disco. E vai abandonar todas elas no capítulo 6, quando entrar em Protected Mode e o BIOS virar abóbora.
+
+<DesignNote title="Por que abandonar o BIOS é um luto">
+O BIOS é gentil com você no Real Mode. Você fala "imprime A" e ele imprime A. No Protected Mode você vai ter que escrever o byte 'A' diretamente em `0xB8000`, lembrar do byte de atributo de cor, posicionar o cursor manualmente. Você vai sentir falta. Mas o BIOS é também uma jaula: cego, lento, e existe na cabeça do processador como um conjunto de rotinas de 16 bits que você não pode chamar de código de 32 bits. Pra crescer, você precisa abandonar. É como o Frankenstein deixando pra trás Genebra: dolorido, mas necessário.
+</DesignNote>
+
+---
+
+## Sua primeira leitura de memória
+
+Hora de fazer alguma coisa. O programa abaixo é minúsculo. Ele lê o byte do endereço `0xB8000` (o início da memória de vídeo) e mostra o valor dele em hexadecimal. Não é elegante. Mas é o primeiro contato consciente seu com a memória física.
+
+Calma que não vamos rodar isso ainda como bootloader (pra isso falta o capítulo 3). Por enquanto, leia ele com a paciência de quem está olhando uma planta arquitetônica antes de entrar na casa.
+
+```nasm
+.code16
+.globl _start
+.section .text
+_start:
+    # Zera os segmentos de dados.
+    xorw %ax, %ax
+    movw %ax, %ds
+    movw %ax, %es
+```
+
+Esse é o ritual de abertura. Zerar `DS` e `ES` significa que todos os offsets que você usar a partir daqui são endereços absolutos a partir do byte zero da RAM. Sem essa linha, qualquer leitura tua estaria sujeita a um valor herdado do BIOS que você não controla.
+
+```nasm
+    # Aponta DS pro segmento da memória de vídeo.
+    movw $0xB800, %ax
+    movw %ax, %ds
+```
+
+Aqui a brincadeira. Em vez de calcular `0xB8000` na unha, a gente coloca `0xB800` em `DS`. Lembra da fórmula? `0xB800 * 16 + offset = 0xB8000 + offset`. Agora qualquer leitura que a gente fizer com offset zero vai cair em `0xB8000`. É um truque clássico do Real Mode pra acessar regiões altas da memória sem dor de cabeça.
+
+```nasm
+    # Lê o primeiro byte da memória de vídeo.
+    movw $0, %si
+    movb (%si), %al
+```
+
+`SI` é um registrador de índice. A gente coloca zero nele. Depois faz `movb (%si), %al`, que significa: "vai no endereço apontado por `DS:SI`, pega o byte que tá lá, e coloca em `AL`". Como `DS = 0xB800` e `SI = 0`, o endereço efetivo é `0xB8000`. O byte lido é o primeiro caractere que está na tela quando seu programa começou a rodar.
+
+```nasm
+    # Imprime o byte como dois dígitos hexadecimais.
+    movb %al, %bl
+    shrb $4, %al
+    call print_hex_digit
+    movb %bl, %al
+    andb $0x0F, %al
+    call print_hex_digit
+```
+
+Aqui a gente quebra o byte em dois pedaços de 4 bits, porque cada dígito hexadecimal representa 4 bits. Primeiro joga uma cópia em `BL`, depois desloca `AL` pra direita 4 vezes pra pegar o nibble alto, imprime. Depois recupera o byte original de `BL`, mascara os 4 bits baixos com `AND`, e imprime o nibble baixo.
+
+```nasm
+    # Trava aqui pra você ver o resultado.
+    cli
+    hlt
+
+print_hex_digit:
+    # Recebe um valor de 0 a 15 em AL e imprime o caractere correspondente.
+    cmpb $10, %al
+    jb 1f
+    addb $('A' - 10), %al
+    jmp 2f
+1:
+    addb $'0', %al
+2:
+    movb $0x0E, %ah
+    movb $0, %bh
+    int $0x10
+    ret
+```
+
+A função `print_hex_digit` recebe um valor de 0 a 15. Se for menor que 10, soma o ASCII de `'0'` (que é 48) e vira `'0'` até `'9'`. Se for 10 ou mais, soma o ASCII de `'A'` menos 10, e vira `'A'` até `'F'`. Depois chama `int 0x10` na função `0x0E` (teletype) pra imprimir o caractere.
+
+Quando você rodar isso no Parede de Carne, vai ver dois caracteres na tela: o valor hex do primeiro byte da memória de vídeo. Provavelmente vai ser `20`, que é o ASCII do espaço, porque a tela começa preenchida de espaços. Mas o ponto não é o valor. O ponto é que você acabou de **ler memória física crua** com seu próprio código. Isso, do nada, do zero, sem sistema operacional.
+
+---
+
+## A herança que você vai carregar
+
+Tudo que você acabou de ver é a fundação de Real Mode. Segmentos de 16 bits, 1 MB total, IVT cheia de serviços do BIOS, código `.code16`. É um modo limitado, antiquado, e frustrante. Mas é onde todo computador x86 começa, sem exceção. Mesmo um processador de 2026 com 64 cores e 256 GB de RAM começa em Real Mode quando você liga ele. A primeira coisa que ele faz é executar instruções de 16 bits buscando um boot sector em `0x7C00`.
+
+A Intel poderia ter mudado isso muitas vezes. Não mudou. Compatibilidade com versões anteriores é uma religião na arquitetura x86, e você vai pagar o preço dessa religião todas as vezes que ligar uma máquina. Aceite.
+
+No próximo capítulo, você vai escrever seu primeiro boot sector real. 512 bytes. Assinatura `0xAA55`. O BIOS vai aceitar ele como filho legítimo e te entregar as chaves do Real Mode pra você fazer o que quiser. É o primeiro contrato, e ele é mais simples do que parece.
+
+---
+
+## Exercícios
+
+<Challenge level={1}>
+**Warm-up.** No programa que lê `0xB8000`, troque o segmento `0xB800` por `0xF000`. Esse é o segmento onde mora a ROM do BIOS. Rode no Parede de Carne e veja o byte que aparece. Você está espiando dentro do código do BIOS, literalmente.
+</Challenge>
+
+<Challenge level={2}>
+**Prática.** Modifique o programa pra imprimir os 8 primeiros bytes de `0xB8000`, separados por espaço. Você vai precisar de um loop que incrementa `SI` de 0 a 7, e uma chamada a uma função que imprime um espaço entre cada byte.
+
+Dica: pra imprimir um espaço, é só colocar `' '` em `AL` e chamar `int 0x10` com `AH = 0x0E`.
+</Challenge>
+
+<Challenge level={3}>
+**Desafio.** A IVT começa no endereço `0x00000` e tem uma entrada de 4 bytes pra cada interrupção. Os primeiros 2 bytes são o offset, os últimos 2 são o segmento. Escreva um programa que lê a entrada da `int 0x10` (que está em `0x10 * 4 = 0x40`) e imprime o segmento e o offset que estão lá.
+
+Você vai estar literalmente lendo o endereço da rotina de vídeo do BIOS. Isso não tem aplicação prática direta no nosso projeto, mas é um daqueles exercícios que muda como você entende o sistema. Se travar, deixa pra depois e volta. Não é fácil, e a beleza tá em ver o número aparecer na tela.
+</Challenge>
+
+---
+
+Você agora tem um modelo mental do Real Mode. Sabe que segmento mais offset forma o endereço, sabe que o seu boot sector mora em `0x7C00`, sabe onde está a IVT e a memória de vídeo, sabe que o BIOS preparou um cardápio de interrupções pra você usar. No próximo capítulo, você vai assinar seu primeiro contrato com o BIOS e ver os 512 bytes mais importantes da sua vida de baixo nível.
+
+<ChapterNav
+  prev="/posts/bootloader-na-pratica/parte-1/3-assembly-x86"
+  next="/posts/bootloader-na-pratica/parte-2/2-disk-and-bios"
+/>

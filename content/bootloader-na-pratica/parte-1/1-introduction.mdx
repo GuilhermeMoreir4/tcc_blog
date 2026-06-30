@@ -2,7 +2,8 @@ import If from "@/components/conditional_component.tsx";
 import Testing from "@/components/testing.tsx";
 import DesignNote from "@/components/DesignNote.tsx";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, ArrowRight, ArrowUp } from "lucide-react";
+import ChapterNav from "@/components/ChapterNav.tsx";
+import Challenge from "@/components/Challenge.tsx";
 
 export let show_unix_tutorial = false;
 
@@ -275,19 +276,4 @@ Escreva um programa que imprima os números de 1 a 5 na tela, cada um em uma lin
 
 Agora é com você. Abra a Parede de Carne e divirta-se!
 
-<footer className="flex justify-between">
-  <a
-    href=""
-    className="flex items-center gap-2 hover:cursor-pointer no-underline"
-  >
-    Sumário
-    <ArrowUp />
-  </a>
-  <a
-    href="/posts/bootloader-na-pratica/parte-1/2-tooling"
-    className="flex items-center gap-2 hover:cursor-pointer no-underline"
-  >
-    Próximo capítulo
-    <ArrowRight />
-  </a>
-</footer>
+<ChapterNav next="/posts/bootloader-na-pratica/parte-1/2-tooling" />

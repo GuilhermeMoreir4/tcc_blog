@@ -1,0 +1,520 @@
+import If from "@/components/conditional_component.tsx";
+import Testing from "@/components/testing.tsx";
+import DesignNote from "@/components/DesignNote.tsx";
+import { Button } from "@/components/ui/button";
+import Challenge from "@/components/Challenge.tsx";
+import ChapterNav from "@/components/ChapterNav.tsx";
+
+export const metadata = {
+  title: "8. A grande transição: Protected Mode",
+  description:
+    "GDT, cli, lgdt, cr0 e o far jump. O ritual mais denso e mais importante do bootloader. A passagem do mundo de 16 bits para o de 32.",
+  date: "2026-04-10T12:00:00Z",
+  tags: ["Assembly", "Protected Mode", "GDT", "Bootloader"],
+};
+
+# A grande transição: Protected Mode
+
+Em _Hunter x Hunter_, lá no arco da Ilha Greed, existe uma cena onde o Killua finalmente quebra o controle mental que a irmã dele tinha sobre o cérebro dele. Ele extrai uma agulha que ficou ali plantada por anos, restringindo o que ele podia fazer. No instante em que a agulha sai, o poder dele explode. Ele sempre teve esse poder. Sempre. Mas tinha uma trava física no caminho que precisava ser removida primeiro, e a remoção é violenta, ritualística, irreversível.
+
+A transição pra Protected Mode é a sua agulha saindo. O processador sempre teve o poder de endereçar 4 GB, executar instruções de 32 bits, multitarefa, proteção de memória. Mas começa cada boot trancado em Real Mode com 16 bits e 1 MB. Pra liberar, você precisa fazer um ritual específico, na ordem certa, sem pular passos. Se errar, o processador entra num estado indefinido e você reinicia. Se acertar, o mundo é outro a partir da instrução seguinte.
+
+Esse é o capítulo mais denso do OA. Não é o mais difícil de ler, mas é o mais difícil de entender de verdade. Tem muita coisa pra encaixar na cabeça antes do código fazer sentido. Eu vou caminhar devagar. Você vai precisar de paciência.
+
+No fim, você vai ter feito a transição completa. Vai ver o vídeo trocar de modo. Vai estar em Protected Mode pela primeira vez na sua vida.
+
+---
+
+## O que muda em Protected Mode
+
+Antes de fazer qualquer coisa, é justo entender o que você está perseguindo. Protected Mode oferece, em troca da cerimônia:
+
+**Endereçamento de 32 bits.** Você passa a ter acesso a até 4 GB de memória. Os registradores `EAX`, `EBX`, `ECX`, `EDX` (versões estendidas dos `AX`, `BX`, etc) ficam disponíveis com 32 bits cada.
+
+**Modelo de memória mais sensato.** A segmentação ainda existe, mas em forma muito mais limpa. Em vez de "segmento \* 16 + offset", você tem segmentos descritos numa tabela (a GDT), cada segmento pode ter qualquer endereço base e qualquer tamanho.
+
+**Proteção (daí o nome).** Você pode marcar páginas de memória como leitura, escrita, executável, ou ring 0/3 (privilegiado/usuário). É a base da separação entre kernel e processos de usuário.
+
+**Sem mais BIOS.** Os serviços de `int 0x10`, `int 0x13`, `int 0x16` que você usou nos capítulos anteriores eram código de 16 bits. Em Protected Mode, eles não funcionam. Você vai estar sozinho.
+
+Essa última frase parece negativa mas é o ponto inteiro. Em Real Mode você dependia do BIOS pra fazer qualquer coisa não trivial. Em Protected Mode você depende de você. É a diferença entre morar com os pais e ter sua própria casa.
+
+---
+
+## A GDT: o mapa do prédio novo
+
+A peça central do Protected Mode é a **GDT**, **Global Descriptor Table**. É uma tabela que você monta na memória e que descreve os segmentos que vão existir no novo mundo.
+
+Pense num prédio comercial. Cada andar é um segmento. Cada andar tem regras: quem pode entrar, o que pode fazer lá, qual é a faixa de horário permitida. A GDT é o mapa do prédio que o segurança consulta antes de te deixar passar.
+
+Cada entrada da GDT é chamada de **descritor de segmento** e tem 8 bytes. Cada descritor diz:
+
+- O **endereço base** do segmento (32 bits, ou seja, em qualquer lugar dos 4 GB).
+- O **limite** do segmento (20 bits, escalável pra 4 GB).
+- Os **flags**: tipo (código ou dado), permissões (leitura, escrita, execução), nível de privilégio (ring 0 ou 3), modo (16 ou 32 bits), granularidade.
+
+Tudo isso espremido em 8 bytes, em uma codificação que parece desenhada pra punir o programador. Vamos ver na prática.
+
+### O descritor nulo
+
+A primeira entrada da GDT, por convenção, é toda zero. É chamado de **descritor nulo**. Ele existe pra detectar erros: se algum código tentar usar o seletor zero (que é o seletor pro descritor nulo), o processador gera uma exceção. É uma rede de segurança contra bugs.
+
+```nasm
+gdt_null:
+    .quad 0
+```
+
+A diretiva `.quad` escreve 8 bytes (um quadword). Zerar tudo. Pronto.
+
+### O descritor de código
+
+A segunda entrada vai ser nosso segmento de código de 32 bits. Ele cobre todos os 4 GB de memória, é executável, e roda em ring 0 (privilegiado). Aqui é onde a codificação fica horrorosa:
+
+```nasm
+gdt_code:
+    .word 0xFFFF        # Limite, bits 0-15
+    .word 0x0000        # Base, bits 0-15
+    .byte 0x00          # Base, bits 16-23
+    .byte 0x9A          # Flags de acesso
+    .byte 0xCF          # Flags + limite (bits 16-19)
+    .byte 0x00          # Base, bits 24-31
+```
+
+Eu sei. Eu sei. Isso é horrível. Vamos por partes.
+
+Os primeiros 2 bytes (`0xFFFF`) são os 16 bits baixos do **limite** do segmento. O limite é o tamanho menos 1, então `0xFFFF` representa um tamanho de 64 KB se a granularidade fosse byte. Mas a gente vai usar granularidade de 4 KB (o último byte), então o limite efetivo é `0xFFFF * 4096 + 4095 = 4 GB - 1`. Cobre tudo.
+
+Os próximos 2 bytes (`0x0000`) são os 16 bits baixos da **base** do segmento. Zero. O byte seguinte (`0x00`) são os bits 16-23 da base. Também zero.
+
+O byte `0x9A` são as **flags de acesso**. Em binário: `10011010`. Cada bit significa uma coisa:
+
+- Bit 7 (`1`): segmento presente.
+- Bits 6-5 (`00`): nível de privilégio 0 (ring 0).
+- Bit 4 (`1`): segmento de código ou dado (não de sistema).
+- Bit 3 (`1`): segmento de código (se fosse 0, seria de dado).
+- Bit 2 (`0`): não conformante (não importa agora).
+- Bit 1 (`1`): legível (segmentos de código por padrão são só executáveis, esse bit permite leitura também).
+- Bit 0 (`0`): não acessado.
+
+O byte `0xCF` são **flags + limite alto**. Em binário: `11001111`. Os 4 bits altos são flags, os 4 baixos são os bits 16-19 do limite:
+
+- Bit 7 (`1`): granularidade de 4 KB (se fosse 0, seria byte).
+- Bit 6 (`1`): operações de 32 bits.
+- Bit 5 (`0`): não 64 bits.
+- Bit 4 (`0`): disponível pro sistema (não usado).
+- Bits 3-0 (`1111`): limite, bits 16-19.
+
+E o último byte (`0x00`) são os bits 24-31 da base. Zero.
+
+Junte tudo: temos um segmento que começa em `0x00000000`, tem tamanho `0xFFFFFFFF` (4 GB - 1), é código de 32 bits, ring 0, legível, presente.
+
+<DesignNote title="Por que a base e o limite são divididos em pedaços?">
+  Porque a Intel queria que descritores de Protected Mode (32 bits) fossem
+  compatíveis em layout com descritores de Real Mode estendido. A base e o
+  limite ficam fragmentados nas posições mais estranhas. Isso é uma cicatriz de
+  1985. Você vai conviver com ela. Decorar não vale a pena: anote em algum lugar
+  que esses são os flags pra "código 32 bits, ring 0, todo mundo pode entrar", e
+  use essa receita.
+</DesignNote>
+
+### O descritor de dado
+
+A terceira entrada é o segmento de dado. Quase igual ao de código, mas com flags que dizem "isso é dado, não código":
+
+```nasm
+gdt_data:
+    .word 0xFFFF
+    .word 0x0000
+    .byte 0x00
+    .byte 0x92
+    .byte 0xCF
+    .byte 0x00
+```
+
+O byte `0x92` em binário é `10010010`. A diferença pro `0x9A` é o bit 3: aqui é 0 (segmento de dado), e o bit 1 agora significa "escrevível" em vez de "legível" (segmentos de dado são lidos por padrão, esse bit permite escrita também). Os outros bits são iguais.
+
+Resultado: segmento que começa em `0x00000000`, tem tamanho de 4 GB, é dado, ring 0, escrevível.
+
+### O fim e o descritor da tabela
+
+Depois dos descritores, marcamos o fim da GDT com uma label e criamos um **GDT descriptor**, que é uma estrutura que aponta pra GDT em si:
+
+```nasm
+gdt_end:
+gdt_descriptor:
+    .word gdt_end - gdt_start - 1
+    .long gdt_start
+```
+
+O GDT descriptor tem 6 bytes: 2 bytes com o tamanho da GDT menos 1, e 4 bytes com o endereço da GDT na memória. Esse é o ponteiro que a gente vai entregar pro processador. A diferença entre "ponteiro pra GDT" e "GDT em si" é uma daquelas distinções sutis que confundem o iniciante: a GDT é a tabela de descritores, o GDT descriptor é o ponteiro pra essa tabela.
+
+A instrução `lgdt` (load GDT) lê o GDT descriptor e configura o registrador interno do processador chamado `GDTR`, que é onde o processador vai consultar a GDT a partir daí.
+
+---
+
+## Os passos do ritual
+
+A transição inteira tem cinco passos, e eles têm que ser nessa ordem:
+
+1. **Desabilitar interrupções.** Se uma interrupção acontecer durante a transição, o processador vai tentar atender em um estado inconsistente e crashear.
+2. **Carregar a GDT.** Diga pro processador onde está a tabela.
+3. **Setar o bit PE no `cr0`.** O bit 0 do registrador de controle 0 é o "Protection Enable". Setar ele faz o processador entrar em Protected Mode na próxima instrução.
+4. **Far jump.** Um salto longo pra "limpar" a pipeline do processador e forçar ele a buscar a próxima instrução já em modo 32 bits.
+5. **Configurar segmentos de dado.** `DS`, `ES`, `FS`, `GS`, `SS` precisam apontar pro descritor de dado. Configurar pilha.
+
+Vamos ver o código.
+
+```nasm
+    movw $msg_gdt, %si
+    call print_string_rm
+    cli
+```
+
+Antes de qualquer coisa, imprime uma mensagem (você sabe, debug). Depois, `cli` desabilita interrupções. A partir daqui, mesmo se um IRQ acontecer, o processador ignora.
+
+```nasm
+    lgdt gdt_descriptor
+```
+
+`lgdt` carrega o GDT descriptor. O processador agora sabe onde está a GDT, mas ainda não usa ela porque ainda está em Real Mode.
+
+```nasm
+    movl %cr0, %eax
+    orl $0x01, %eax
+    movl %eax, %cr0
+```
+
+Aqui acontece a magia. `movl %cr0, %eax` lê o registrador `CR0` em `EAX`. `orl $0x01, %eax` seta o bit 0. `movl %eax, %cr0` escreve de volta. No instante exato em que a terceira instrução executa, **o processador entra em Protected Mode**.
+
+Mas aqui tem uma sutileza catastrófica. O processador moderno tem **pipeline**: ele pré-busca instruções enquanto executa as anteriores. Quando a gente seta `CR0`, instruções já podem ter sido pré-buscadas em modo 16 bits. Se a gente continuar executando linearmente, essas instruções pré-buscadas vão rodar em estado quebrado.
+
+A solução é o **far jump**:
+
+```nasm
+    ljmp $0x08, $protected_mode_start
+```
+
+Um `ljmp` força o processador a esvaziar a pipeline e buscar a próxima instrução do zero, dessa vez já com a configuração nova. O `0x08` é o seletor pro descritor de código (lembra que nosso descritor de código é a segunda entrada da GDT? Cada entrada tem 8 bytes, então a primeira está no offset 0, a segunda no offset 8). O `protected_mode_start` é a label onde a gente quer continuar.
+
+A partir do `ljmp`, o processador está em Protected Mode, executando código de 32 bits, com `CS` apontando pro descritor de código.
+
+---
+
+## Vida nos primeiros instantes do Protected Mode
+
+A próxima label tem que estar em código de 32 bits. Pra isso, a gente troca a diretiva:
+
+```nasm
+.code32
+protected_mode_start:
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
+```
+
+`.code32` diz pro assembler: "tudo que vier daqui pra baixo é código de 32 bits". Sem isso, as instruções iam ser codificadas como 16 bits e o processador, agora em Protected Mode, ia interpretar os bytes errado.
+
+Os `movw $0x10, %ax` seguidos de cópias pros segmentos de dado fazem o seguinte: `0x10` é o seletor pro descritor de dado (terceira entrada da GDT, offset 16). A gente coloca esse seletor em todos os registradores de segmento de dado: `DS`, `ES`, `FS`, `GS`, `SS`.
+
+Por que tantos? `DS` é o segmento de dado padrão. `ES` é o "extra". `FS` e `GS` são segmentos adicionais que sistemas operacionais modernos usam pra coisas tipo storage de thread. `SS` é o segmento da pilha. Em Protected Mode, todos eles precisam apontar pra um descritor válido. Como nosso modelo de memória é "todo mundo cobre os 4 GB", a gente coloca todos no mesmo seletor.
+
+```nasm
+    movl $0x90000, %esp
+```
+
+Define a nova pilha. `0x90000` é um endereço alto, longe do nosso código. A pilha vai crescer pra baixo a partir daí, ocupando memória abaixo de `0x90000`.
+
+---
+
+## A primeira escrita direta na memória de vídeo
+
+Lembra que em Real Mode a gente usava `int 0x10` pra imprimir? Em Protected Mode, isso não funciona mais (BIOS é código de 16 bits, não pode ser chamado a partir de 32 bits). Pra mostrar que a gente está vivo, vamos escrever direto na memória de vídeo.
+
+A memória de texto da VGA mora em `0xB8000`. Cada caractere ocupa 2 bytes: o primeiro é o ASCII, o segundo é o **atributo** (cor de texto e cor de fundo).
+
+```nasm
+    movl $0xB8000, %edi
+    addl $(6 * 160), %edi
+```
+
+`EDI` (extended destination index) recebe `0xB8000`. Depois somamos `6 * 160`, o que move `EDI` 6 linhas pra baixo. Cada linha tem 80 caracteres, cada caractere tem 2 bytes, então cada linha tem 160 bytes. A multiplicação dá 960 bytes.
+
+Por que descer 6 linhas? Porque as linhas anteriores já têm as mensagens do Real Mode impressas pelo BIOS. A gente não quer escrever em cima delas.
+
+```nasm
+    movl $msg_pm, %esi
+    movb $0x0A, %ah
+1:
+    lodsb
+    orb %al, %al
+    jz 2f
+    movw %ax, (%edi)
+    addl $2, %edi
+    jmp 1b
+2:
+```
+
+`ESI` aponta pra string. `AH = 0x0A` é o atributo: bit 3 setado significa "verde brilhante", os outros bits zerados significam "fundo preto". Esse `0x0A` vai junto com cada caractere.
+
+O loop:
+
+- `lodsb` lê um byte da string em `AL`.
+- Se o byte é zero, sai do loop.
+- `movw %ax, (%edi)` escreve `AX` em `[EDI]`. `AX` contém `AH` (atributo) e `AL` (caractere). Esse é o truque que faz a gente escrever ASCII e atributo de uma vez.
+- Avança `EDI` em 2 bytes pro próximo caractere.
+
+Quando o loop termina, a string está na tela em verde brilhante.
+
+```nasm
+    movl $0x10000, %eax
+    call *%eax
+```
+
+E aqui o Stage 2 termina. Ele carrega `0x10000` em `EAX` (que é onde a gente carregou o kernel) e chama esse endereço como função (`call *%eax`). O kernel toma o controle. Mas o kernel ainda não existe; vamos escrever ele no próximo capítulo.
+
+```nasm
+    cli
+    hlt
+2b:
+    jmp 2b
+```
+
+Se o kernel retornar (ou se o `call` falhar), trava. Rede de segurança.
+
+---
+
+## O Stage 2 completo até a transição
+
+Vamos juntar tudo. Esse é o Stage 2 final desse capítulo:
+
+```nasm
+.code16
+.globl _stage2_entry
+.section .text
+_stage2_entry:
+    movw $msg_stage2, %si
+    call print_string_rm
+    movw $msg_loading, %si
+    call print_string_rm
+
+    movw $0x1000, %ax
+    movw %ax, %es
+    xorw %bx, %bx
+    movb $0x02, %ah
+    movb $32, %al
+    movb $0, %ch
+    movb $6, %cl
+    movb $0, %dh
+    movb $0x80, %dl
+    int $0x13
+    jc disk_error_s2
+    xorw %ax, %ax
+    movw %ax, %es
+    movw $msg_kernel_loaded, %si
+    call print_string_rm
+
+    inb $0x92, %al
+    testb $0x02, %al
+    jnz a20_done
+    orb $0x02, %al
+    andb $0xFE, %al
+    outb %al, $0x92
+a20_done:
+    movw $msg_a20, %si
+    call print_string_rm
+
+    movw $msg_gdt, %si
+    call print_string_rm
+
+    cli
+    lgdt gdt_descriptor
+    movl %cr0, %eax
+    orl $0x01, %eax
+    movl %eax, %cr0
+    ljmp $0x08, $protected_mode_start
+
+.align 8
+gdt_start:
+gdt_null:
+    .quad 0
+gdt_code:
+    .word 0xFFFF
+    .word 0x0000
+    .byte 0x00
+    .byte 0x9A
+    .byte 0xCF
+    .byte 0x00
+gdt_data:
+    .word 0xFFFF
+    .word 0x0000
+    .byte 0x00
+    .byte 0x92
+    .byte 0xCF
+    .byte 0x00
+gdt_end:
+gdt_descriptor:
+    .word gdt_end - gdt_start - 1
+    .long gdt_start
+
+.code32
+protected_mode_start:
+    movw $0x10, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %fs
+    movw %ax, %gs
+    movw %ax, %ss
+    movl $0x90000, %esp
+
+    movl $0xB8000, %edi
+    addl $(6 * 160), %edi
+    movl $msg_pm, %esi
+    movb $0x0A, %ah
+1:
+    lodsb
+    orb %al, %al
+    jz 2f
+    movw %ax, (%edi)
+    addl $2, %edi
+    jmp 1b
+2:
+    movl $0x10000, %eax
+    call *%eax
+    cli
+    hlt
+3:
+    jmp 3b
+
+.code16
+print_string_rm:
+    pusha
+1:
+    lodsb
+    orb %al, %al
+    jz 2f
+    movb $0x0E, %ah
+    movb $0, %bh
+    int $0x10
+    jmp 1b
+2:
+    popa
+    ret
+
+disk_error_s2:
+    movw $msg_disk_err_s2, %si
+    call print_string_rm
+    cli
+    hlt
+    jmp disk_error_s2
+
+msg_stage2:
+    .asciz "[BOOT] Stage 2 iniciado (0x7E00)\r\n"
+msg_loading:
+    .asciz "[BOOT] Carregando kernel para 0x10000...\r\n"
+msg_kernel_loaded:
+    .asciz "[BOOT] Kernel carregado (32 setores)\r\n"
+msg_a20:
+    .asciz "[BOOT] A20 line habilitada\r\n"
+msg_gdt:
+    .asciz "[BOOT] GDT carregada, entrando em Protected Mode...\r\n"
+msg_disk_err_s2:
+    .asciz "[ERRO] Falha ao carregar kernel!\r\n"
+
+.code32
+msg_pm:
+    .asciz "[PM32] Protected Mode 32-bit ativo!"
+
+.fill 2048 - (. - _stage2_entry), 1, 0
+```
+
+A diretiva `.align 8` antes de `gdt_start` força o alinhamento da GDT em 8 bytes. Não é estritamente necessário em todas as máquinas, mas é boa prática. A Intel recomenda.
+
+A diretiva `.code32` aparece duas vezes: uma antes de `protected_mode_start` (porque esse código roda em 32 bits) e uma antes de `msg_pm` (porque essa string vai ser acessada por código de 32 bits, e algumas operações de string podem ter codificação diferente). Pode parecer paranoia mas é a forma segura.
+
+E a função `print_string_rm` está **depois** do código de Protected Mode. Por quê? Porque ela é código de 16 bits e nunca vai ser chamada depois da transição. A `.code16` antes dela diz isso pro assembler.
+
+---
+
+## Quando rodar
+
+Ao rodar esse Stage 2 (junto com o Stage 1 do capítulo 4), você deve ver:
+
+```
+[BOOT] Stage 1 - Boot sector carregado (0x7C00)
+[BOOT] Stage 2 carregado em 0x7E00, saltando...
+[BOOT] Stage 2 iniciado (0x7E00)
+[BOOT] Carregando kernel para 0x10000...
+[BOOT] Kernel carregado (32 setores)
+[BOOT] A20 line habilitada
+[BOOT] GDT carregada, entrando em Protected Mode...
+[PM32] Protected Mode 32-bit ativo!
+```
+
+Aquela última linha, em verde, vem da escrita direta na memória de vídeo. Se você está vendo ela, o ritual deu certo. Você está em Protected Mode.
+
+E aí, depois dela, provavelmente o computador trava ou reinicia, porque o `call *%eax` está pulando pra `0x10000` e lá não tem código válido (a leitura de 32 setores carregou bytes vazios ou lixo). Isso vai ser resolvido no próximo capítulo, quando a gente escrever o kernel.
+
+Por enquanto, foque no fato de que aquela linha verde apareceu. Você fez o ritual. A agulha saiu.
+
+<DesignNote title="O que pode dar errado e como debugar">
+Se você não vê a linha verde, alguma coisa no ritual quebrou. Os culpados mais comuns são:
+
+1. **GDT mal montada.** Algum byte errado nas flags. Releia com calma.
+2. **A20 não habilitada.** O `call *%eax` pra `0x10000` vira `0x00000` silenciosamente, e o processador executa o que tiver lá.
+3. **Far jump pro seletor errado.** `0x08` é o seletor de código. Se você colocou `0x10` por engano, vai dar exception.
+4. **Faltou `cli`.** Uma interrupção entre `lgdt` e o far jump quebra tudo.
+
+Debugar Protected Mode sem ferramentas é frustrante. Na prática, uso QEMU com GDB anexado pra ver o estado dos registradores na hora exata da transição. No Parede de Carne, a sua forma de debug é: comentar partes, ver até onde aparece mensagem em Real Mode, descobrir qual passo falha.
+
+</DesignNote>
+
+---
+
+## Por que essa transição é irreversível
+
+Tem uma coisa que vou dizer e você pode achar exagerado: depois que você entra em Protected Mode, **voltar pra Real Mode é uma operação esotérica que ninguém faz**. Tecnicamente é possível (existe algo chamado "Unreal Mode" e existem trucagens com `cr0`), mas em sistema operacional sério, não se faz. A transição é uma porta que você atravessa e queima.
+
+Por que? Porque os serviços do BIOS, embora sejam de 16 bits, são desenhados pra serem chamados de 16 bits. Voltar pra 16 só pra usar o BIOS é trocar dois caminhões inteiros de complexidade por uma facilidade que um sistema operacional sério vai abandonar mesmo. O Linux, o Windows, o macOS, todos abandonam o BIOS irrevogavelmente assim que entram em Protected Mode (ou Long Mode, em sistemas 64 bits). Quando precisam de hardware, escrevem drivers próprios.
+
+Você está fazendo o que esses sistemas fazem. Olha pelo retrovisor uma última vez. O Real Mode foi seu lar nos capítulos 2 a 5. A partir de agora, ele é um país que você visitou.
+
+---
+
+## Exercícios
+
+<Challenge level={1}>
+  **Warm-up.** Mude a cor da mensagem `[PM32] Protected Mode 32-bit ativo!` pra
+  azul brilhante. O atributo de cor é o byte que vai em `AH`. Pesquise os
+  valores de cor do VGA text mode (são 16 cores, cada uma representada por um
+  nibble). Recompile, rode, veja a cor diferente.
+</Challenge>
+
+<Challenge level={2}>
+**Prática.** Adicione uma quarta entrada na GDT: um descritor de **código 16 bits** (seletor `0x18`). Os flags são quase iguais ao descritor de código atual, mas com o bit "32 bits" desligado.
+
+A motivação: com esse descritor, em teoria, você poderia voltar pra Real Mode mais tarde se quisesse. Você não precisa voltar de fato (a gente não vai), só adicionar a entrada e garantir que o `lgdt` não falha. Depois, conte os bytes da GDT e veja como o `gdt_descriptor` ainda está correto (deve estar, porque o tamanho é calculado dinamicamente com `gdt_end - gdt_start - 1`).
+
+</Challenge>
+
+<Challenge level={3}>
+**Desafio.** Modifique seu Stage 2 pra que, em Protected Mode, ele **limpe a tela inteira antes** de imprimir a mensagem verde. A tela tem 80 colunas e 25 linhas, ou seja, 2000 caracteres, cada um ocupando 2 bytes na memória de vídeo. Total: 4000 bytes em `0xB8000`.
+
+Você precisa escrever em cada par de bytes: o caractere espaço (`0x20`) e um atributo (sugiro `0x07`, que é cinza claro sobre preto, o padrão). Use um loop com `ECX` como contador.
+
+Pista: a instrução `rep stosw` é desenhada exatamente pra isso. Ela escreve `AX` em `[EDI]`, incrementa `EDI` em 2, decrementa `ECX`, e repete enquanto `ECX > 0`. Configurar: `EDI = 0xB8000`, `ECX = 2000`, `AX = 0x0720` (atributo na parte alta, espaço na baixa), e `rep stosw`.
+
+Esse desafio te ensina dois conceitos novos: instruções de string em 32 bits, e o uso do `rep` prefix. É pouco código mas é um marco: você está começando a escrever código que parece um kernel de verdade, manipulando memória em massa em vez de byte a byte. Se travar, lembre que `rep` precisa de `ECX` setado e da direção da flag de string (use `cld` antes pra garantir que é forward).
+
+</Challenge>
+
+---
+
+Você acabou de fazer o ritual de passagem do bootloader. A partir desse capítulo, seu código roda em 32 bits, com 4 GB endereçáveis, sem o BIOS pra te socorrer. No próximo capítulo, você vai aprender a sobreviver nesse mundo novo: escrever direto na memória de vídeo de forma mais sofisticada, organizar um mini-kernel em C (sim, vamos sair do Assembly), e finalmente fazer aquele `call *%eax` saltar pra um kernel de verdade em vez de um endereço vazio. Se você sobreviveu até aqui, o resto é descida.
+
+<ChapterNav
+  prev="/posts/bootloader-na-pratica/parte-2/4-stage-2"
+  next="/posts/bootloader-na-pratica/parte-3/1-seldon-os"
+/>

@@ -1,0 +1,353 @@
+import If from "@/components/conditional_component.tsx";
+import Testing from "@/components/testing.tsx";
+import DesignNote from "@/components/DesignNote.tsx";
+import { Button } from "@/components/ui/button";
+import Challenge from "@/components/Challenge.tsx";
+import ChapterNav from "@/components/ChapterNav.tsx";
+
+export const metadata = {
+  title: "6. Stage 1: O elevador de 512 bytes",
+  description: "O Stage 1 tem um trabalho só: ir buscar o Stage 2 no disco. int 0x13, LBA, CHS e o drama de caber em meio kilobyte.",
+  date: "2026-03-27T12:00:00Z",
+  tags: ["Assembly", "Bootloader", "BIOS", "Disco"],
+};
+
+# Stage 1: O elevador de 512 bytes
+
+Em *O Senhor dos Anéis*, Frodo não precisava ir até a Montanha da Perdição sozinho desde o começo. Ele precisava primeiro chegar em Valfenda. E pra chegar em Valfenda, ele precisava chegar em Bri. E pra chegar em Bri, precisava sair do Condado vivo. Cada etapa carrega ele um pouco mais longe, e cada etapa exige pouquinho do que vai exigir a próxima. O Frodo do Condado não conseguiria sequer olhar pra Sauron sem desmaiar. Mas o Frodo de Valfenda já viu coisas. Ele cresceu no caminho.
+
+Seu bootloader funciona assim. O Stage 1 não vai fazer um sistema operacional. O Stage 1 tem um trabalho miserável e específico: **encontrar o Stage 2 no disco e carregar ele na memória**. Acabou. Depois disso, o Stage 1 morre, e o Stage 2 toma o controle. É um relé. Um elevador que sobe um andar e abre a porta pra você descer.
+
+Mas esse capítulo não é só sobre passar o bastão. É sobre como você fala com o disco. Ler bytes da memória é fácil porque a memória está ali, ao lado do processador. Ler bytes do disco é trabalhoso porque o disco é um país estrangeiro com idioma próprio, e o tradutor que você tem pra falar com ele é o BIOS, especificamente a `int 0x13`.
+
+No fim, você vai ter um Stage 1 que lê setores do disco, copia o Stage 2 pra um endereço de memória, e salta pra ele. Vai ter feito a primeira metade do bootloader real.
+
+---
+
+## CHS, LBA, e o pesadelo da geometria
+
+Antes de pedir pro disco te dar bytes, você precisa entender como ele te oferece bytes. Existem duas formas históricas de endereçar um setor de disco, e o BIOS, sendo o BIOS, suporta as duas e te força a escolher.
+
+A primeira é **CHS**, que significa **Cylinder, Head, Sector**. Vem da era dos discos rígidos mecânicos, onde você tinha vários pratos empilhados, cada prato tinha duas cabeças de leitura (uma de cada lado), e cada cabeça lia trilhas concêntricas chamadas cilindros, e cada cilindro era dividido em setores. Pra ler um setor, você dizia: "cilindro 5, cabeça 1, setor 18". O drive virava o prato, posicionava a cabeça, esperava o setor passar embaixo, lia.
+
+CHS faz sentido em um disco mecânico de 1981. Em 2026, com SSDs que não têm pratos nem cabeças nem cilindros, é uma fantasia. Mas o BIOS ainda exige números nesse formato porque a interface foi desenhada pra discos mecânicos e nunca mudou.
+
+A segunda é **LBA**, **Logical Block Addressing**. Aqui você simplesmente diz: "me dá o setor número 1234". O drive (ou o BIOS, ou o controlador) traduz pra geometria física se for o caso. É linear, simples, moderno, e existe nas extensões mais novas da `int 0x13`.
+
+Pro nosso bootloader, vamos usar CHS porque é o que funciona universalmente sem depender de extensões. O preço é ter que pensar em cilindros e setores. Mas a conta é simples e a gente faz uma vez só.
+
+<DesignNote title="A conta da geometria">
+Em CHS, os setores são numerados a partir de 1 (não zero). Os cilindros e cabeças são numerados a partir de zero. O setor 1 do cilindro 0, cabeça 0 é o seu boot sector (`0x7C00`). Por convenção, nosso Stage 2 começa imediatamente depois, no setor 2 do cilindro 0, cabeça 0. Isso é uma escolha nossa, baseada em como a gente vai gravar o disco. O BIOS não impõe.
+</DesignNote>
+
+---
+
+## A int 0x13: a porta pro disco
+
+A `int 0x13` é a interrupção do BIOS pra serviços de disco. Pra ler setores, a função é `0x02`. Antes de chamar, você precisa preencher um monte de registradores:
+
+- `AH` = `0x02` (função "ler setores").
+- `AL` = quantos setores ler (1 a 128, dependendo da implementação).
+- `CH` = número do cilindro (8 bits, mas tem mais 2 bits em `CL`, deixa quieto por enquanto).
+- `CL` = número do setor inicial (1 a 63 nos 6 bits baixos).
+- `DH` = número da cabeça.
+- `DL` = número do drive (`0x80` é o primeiro disco rígido).
+- `ES:BX` = endereço onde os dados vão ser carregados.
+
+Se a leitura der certo, o BIOS retorna com a flag de carry zerada e os dados na memória. Se der errado, retorna com carry setado e um código de erro em `AH`.
+
+Vamos construir o pedaço do Stage 1 que lê o Stage 2.
+
+---
+
+## Lendo o Stage 2 do disco
+
+Vamos partir do Stage 1 mínimo do capítulo anterior, aquele que limpava a tela e imprimia uma mensagem. Agora a gente vai estender ele pra:
+
+1. Imprimir uma mensagem dizendo "carreguei".
+2. Ler 4 setores do disco a partir do setor 2.
+3. Colocar esses setores em `0x7E00` (logo depois do nosso boot sector).
+4. Pular pra `0x7E00`.
+
+Comecemos pelo bloco que faz a leitura. Vou mostrar partes pequenas e a gente vai costurando.
+
+```nasm
+    movb $0x02, %ah
+    movb $4, %al
+```
+
+`AH = 0x02` é a função "ler setores". `AL = 4` significa "ler 4 setores". Por que 4? Porque pro Stage 2 que a gente vai construir cabe folgadamente em 4 setores (4 * 512 = 2048 bytes, o que é um luxo absurdo depois de viver em 512). Você pode aumentar mais tarde se precisar.
+
+```nasm
+    movb $0, %ch
+    movb $2, %cl
+    movb $0, %dh
+```
+
+`CH = 0` é o cilindro 0. `CL = 2` é o setor 2 (lembra, setores são 1-indexados, e o setor 1 é o boot sector que já está em memória). `DH = 0` é a cabeça 0. Tradução pra português: "leia a partir do segundo setor do disco, na primeira trilha, do primeiro lado".
+
+```nasm
+    movb boot_drive, %dl
+```
+
+Lembra que no capítulo anterior a gente salvou o número do drive de boot na variável `boot_drive`? É aqui que ele aparece. `DL` recebe o número do drive de onde a gente quer ler. Como queremos ler do mesmo disco que o Stage 1 veio (faz sentido, né?), passamos o valor que o BIOS nos entregou.
+
+```nasm
+    movw $0x7E00, %bx
+```
+
+`BX = 0x7E00` é o offset onde os dados serão escritos. Mas o endereço efetivo é `ES:BX`. Como a gente zerou `ES` lá no início, o endereço efetivo é `0x0000:0x7E00`, ou seja, físico `0x7E00`. Esse é o byte imediatamente depois do nosso boot sector (que vai de `0x7C00` a `0x7DFF`). O Stage 2 vai morar grudado no Stage 1 na memória.
+
+```nasm
+    int $0x13
+```
+
+Chama o BIOS. O processador agora está executando código do BIOS, que vai conversar com o controlador de disco, mover a cabeça (se for um disco mecânico), ler os setores, copiar pra memória. Pode levar alguns milissegundos. Quando a `int 0x13` retorna, ou os dados estão lá, ou a operação falhou.
+
+```nasm
+    jc disk_error
+    cmpb $4, %al
+    jne disk_error
+```
+
+`jc` salta se a flag de carry estiver setada, que é o sinal de erro do BIOS. `cmpb $4, %al` compara `AL` com 4. Depois da leitura, `AL` contém o número de setores que **realmente foram lidos**. Se a gente pediu 4 e leu 4, beleza. Se leu menos, alguma coisa errada aconteceu (disco com defeito, leitura parcial, BIOS bugado), e a gente trata como erro.
+
+Esse padrão de checar duas coisas (carry e contagem) é importante. Tem BIOS que mente sobre o carry mas é honesto sobre `AL`. Tem BIOS que mente sobre `AL` mas seta carry. Cobrindo os dois, você cobre 99% dos casos.
+
+---
+
+## Tratando erro de disco
+
+Se a leitura falhar, a gente precisa fazer alguma coisa. O mínimo é avisar o usuário e travar. Não dá pra continuar sem o Stage 2: ele é o programa de verdade.
+
+```nasm
+disk_error:
+    movw $msg_disk_err, %si
+    call print_string
+    jmp halt
+```
+
+`disk_error` é uma label. Se chegamos aqui, é porque algo deu errado. A gente carrega o ponteiro da string de erro em `SI`, chama nossa função `print_string` (a mesma do capítulo anterior), e pula pro `halt`.
+
+```nasm
+halt:
+    cli
+    hlt
+    jmp halt
+```
+
+A trava em três camadas. Você já viu antes. Depois desse ponto, o computador está oficialmente morto até alguém apertar reset.
+
+---
+
+## O salto pro Stage 2
+
+Se a leitura foi bem-sucedida, o Stage 2 está agora em `0x7E00`, prontinho pra rodar. A última coisa que o Stage 1 faz é pular pra ele:
+
+```nasm
+    movw $msg_jump, %si
+    call print_string
+    ljmp $0x0000, $0x7E00
+```
+
+Imprime a mensagem de "saltando", depois faz um `ljmp` (long jump) pra `0x0000:0x7E00`. Por que long jump? Porque um `jmp` normal em Real Mode só altera `IP`, mantendo `CS` igual. Um `ljmp` altera os dois, garantindo que `CS = 0x0000` e `IP = 0x7E00`. É a forma defensiva de garantir que o processador vai parar exatamente onde a gente quer, sem assumir que `CS` já estava certo.
+
+A partir do momento que esse `ljmp` executa, o Stage 1 morre. As instruções que vinham depois dele na memória, mesmo que existissem, nunca mais seriam executadas. O Stage 2 está no comando agora.
+
+<DesignNote title="A morte cerimoniosa do Stage 1">
+O Stage 1 não chama o Stage 2. Ele pula pra ele. Isso significa que não tem volta. Não tem retorno. Não tem 'depois eu termino aqui'. Quando o Stage 1 dá `ljmp`, ele aceita que sua função na vida acabou. Programadores acostumados com o conforto de funções que retornam acham isso estranho. Mas é a realidade do bootloader: cada estágio é descartável depois que entrega seu produto. Frodo precisava do Bilbo pra começar a história, mas o Bilbo nunca foi pra Mordor. Cada um tem seu pedaço.
+</DesignNote>
+
+---
+
+## O Stage 1 completo
+
+Juntando tudo, o Stage 1 final fica assim:
+
+```nasm
+.code16
+.globl _start
+.section .text
+_start:
+    xorw %ax, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
+    movw $0x7C00, %sp
+    movb %dl, boot_drive
+
+    movb $0x00, %ah
+    movb $0x03, %al
+    int $0x10
+
+    movw $msg_boot, %si
+    call print_string
+
+    movb $0x02, %ah
+    movb $4, %al
+    movb $0, %ch
+    movb $2, %cl
+    movb $0, %dh
+    movb boot_drive, %dl
+    movw $0x7E00, %bx
+    int $0x13
+    jc disk_error
+    cmpb $4, %al
+    jne disk_error
+
+    movw $msg_jump, %si
+    call print_string
+    ljmp $0x0000, $0x7E00
+
+disk_error:
+    movw $msg_disk_err, %si
+    call print_string
+    jmp halt
+
+halt:
+    cli
+    hlt
+    jmp halt
+
+print_string:
+    pusha
+1:
+    lodsb
+    orb %al, %al
+    jz 2f
+    movb $0x0E, %ah
+    movb $0, %bh
+    int $0x10
+    jmp 1b
+2:
+    popa
+    ret
+
+boot_drive:
+    .byte 0
+msg_boot:
+    .asciz "[BOOT] Stage 1 - Boot sector carregado (0x7C00)\r\n"
+msg_jump:
+    .asciz "[BOOT] Stage 2 carregado em 0x7E00, saltando...\r\n"
+msg_disk_err:
+    .asciz "[ERRO] Falha na leitura do disco!\r\n"
+
+.fill 510 - (. - _start), 1, 0
+.word 0xAA55
+```
+
+Tudo junto, batendo certinho em 512 bytes. Esse é o seu Stage 1 definitivo. Vai ser chamado milhares de vezes ao longo desse OA. Carrega ele com carinho.
+
+Repare nos `\r\n` no fim das mensagens. O `\r` é carriage return (volta o cursor pra coluna 0), o `\n` é line feed (desce uma linha). Em terminais modernos só `\n` resolve, mas o BIOS no modo teletype trata os dois caracteres separadamente: sem `\r`, a linha desce mas o cursor fica na coluna onde estava. Você ia ver a próxima mensagem começando lá no meio da tela. Detalhe pequeno, sintoma de quem está vivendo perto do hardware.
+
+---
+
+## O drama de caber em 512 bytes
+
+Você provavelmente percebeu que esse Stage 1 tem coisa demais pra um espaço pequeno. Vamos contar:
+
+- Inicialização (registradores, pilha, drive): umas 15 instruções.
+- Limpa tela: 3 instruções.
+- Print de mensagem: 2 instruções (sem contar a função).
+- Leitura de disco: 9 instruções, sem contar checagens.
+- Salto pro Stage 2: 3 instruções.
+- Tratamento de erro: 3 instruções.
+- `print_string`: 9 instruções.
+- Trava: 3 instruções.
+- Strings: 3 strings de tamanho razoável.
+
+Tudo isso tem que caber em 510 bytes (os outros 2 são a assinatura). E cabe. Mas com pouca folga. Se você quiser adicionar uma quarta mensagem ou uma checagem extra, vai estourar.
+
+Esse é o motivo de existir o Stage 2. O Stage 1 só pode ser pequeno porque o BIOS lê só 512 bytes. Pra fazer qualquer coisa séria, você precisa de mais espaço, e a única forma de conseguir mais espaço é ler mais setores do disco. E pra ler mais setores, você precisa de um pedaço de código que faça a leitura. Esse pedaço é o Stage 1.
+
+É circular: o Stage 1 só existe pra carregar o Stage 2, que é o programa que você queria escrever desde o começo. O Stage 1 é o bilhete de entrada da peça, não a peça.
+
+---
+
+## Compilando o disco completo
+
+Agora a gente tem dois pedaços: `stage1.bin` (512 bytes) e `stage2.bin` (que vamos escrever no próximo capítulo, mas vamos imaginar que já existe). Pra criar uma imagem de disco que contenha os dois, a gente precisa concatenar e preencher o resto:
+
+```bash
+# Stage 1 vai no setor 1 (offset 0)
+# Stage 2 vai a partir do setor 2 (offset 512)
+cat stage1.bin stage2.bin > disk.img
+
+# Preenche o resto pra ter um disco "redondo"
+# (ajuste o tamanho conforme necessário)
+truncate -s 1474560 disk.img
+```
+
+O `truncate -s 1474560` faz a imagem ter exatamente 1.44 MB, que é o tamanho de um disquete antigo. O Parede de Carne aceita qualquer tamanho razoável, mas 1.44 MB é compatível com tudo.
+
+Pra rodar no Parede de Carne, você carrega `disk.img` como imagem de boot, e o emulador vai apresentar como se fosse um disquete físico. O BIOS virtual vai ler o setor 1, pular pro Stage 1, que vai ler os setores 2 a 5 (4 setores) com o Stage 2, e pular pra ele.
+
+---
+
+## Quando o Stage 2 ainda não existe
+
+Como a gente vai escrever o Stage 2 só no próximo capítulo, pra você testar o Stage 1 agora, dá pra criar um Stage 2 trivial só pra ver o salto funcionando:
+
+```nasm
+.code16
+.globl _stage2
+.section .text
+_stage2:
+    movw $msg, %si
+1:
+    lodsb
+    orb %al, %al
+    jz 2f
+    movb $0x0E, %ah
+    int $0x10
+    jmp 1b
+2:
+    cli
+    hlt
+
+msg:
+    .asciz "Stage 2 vivo!"
+```
+
+Compile, conecte com o Stage 1, rode. Você deve ver:
+
+```
+[BOOT] Stage 1 - Boot sector carregado (0x7C00)
+[BOOT] Stage 2 carregado em 0x7E00, saltando...
+Stage 2 vivo!
+```
+
+Esse é o sinal de que o salto deu certo. As três linhas vêm de duas fontes diferentes: as duas primeiras do Stage 1, a última do Stage 2. Você acabou de fazer um programa que carregou outro programa. Bem-vindo ao mundo do bootloading em cadeia.
+
+---
+
+## Exercícios
+
+<Challenge level={1}>
+**Warm-up.** No Stage 1, mude a quantidade de setores lidos de 4 pra 8. Você vai precisar mudar `movb $4, %al` pra `movb $8, %al`, e a checagem `cmpb $4, %al` pra `cmpb $8, %al`. Recompile, gere uma imagem de disco com 8 setores depois do Stage 1 (mesmo que o Stage 2 só ocupe alguns), e veja se ainda boota.
+
+Esse exercício é simples mas ensina algo importante: a checagem de "AL é igual ao que pedi" precisa estar sincronizada com o que você pediu, e qualquer descompasso quebra o boot.
+</Challenge>
+
+<Challenge level={2}>
+**Prática.** Modifique seu Stage 1 pra que, em caso de erro de leitura, ele imprima também o **código de erro** que o BIOS retorna em `AH`. O código vem em hexadecimal, então você vai precisar reaproveitar (ou reescrever) a função `print_hex_digit` do capítulo 4.
+
+Cuidado: você está limitado a 512 bytes. Se a função de print hex te empurrar pra fora, vai precisar otimizar outra coisa pra caber. Esse exercício te força a vivenciar a economia de bytes.
+</Challenge>
+
+<Challenge level={3}>
+**Desafio.** Modifique seu Stage 1 pra implementar **retry**: se a leitura do disco falhar, tente de novo até 3 vezes antes de desistir. Discos reais (especialmente disquetes, mas também alguns mecânicos antigos) às vezes erram a primeira leitura e acertam na segunda. Implementar retry é prática padrão em bootloaders sérios.
+
+A lógica: você precisa de um contador (use um byte na memória), e antes de pular pra `disk_error`, decrementa e pula de volta pra leitura se ainda há tentativas. Lembre que você precisa **resetar o controlador de disco** entre tentativas, com `int 0x13`, função `0x00` (com `DL` igual ao drive), pra garantir que a cabeça volta pro lugar.
+
+Esse desafio é puxado, e adicionar retry pode te empurrar pra fora dos 512 bytes. Se acontecer, é uma situação real: bootloaders sérios resolvem isso movendo a lógica de retry pro Stage 2 e mantendo o Stage 1 minimalista. Você pode optar por implementar retry só lá. Pense sobre o trade-off.
+</Challenge>
+
+---
+
+Você agora tem um Stage 1 completo. Ele é o cocheiro que entrega o conde Drácula na sua porta. Ele lê o disco, carrega seu programa de verdade, e some. No próximo capítulo, finalmente, você vai escrever o programa de verdade. O Stage 2. Aquele que tem espaço pra existir, pra fazer mais de uma coisa, pra finalmente parecer um programa e não um conjunto de truques mágicos pra caber em meio kilobyte.
+
+<ChapterNav
+  prev="/posts/bootloader-na-pratica/parte-2/2-disk-and-bios"
+  next="/posts/bootloader-na-pratica/parte-2/4-stage-2"
+/>

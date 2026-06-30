@@ -1,5 +1,5 @@
-import { ArrowLeft, ArrowRight } from "lucide-react";
 import Challenge from "@/components/Challenge.tsx";
+import ChapterNav from "@/components/ChapterNav.tsx";
 import DesignNote from "@/components/DesignNote.tsx";
 
 export const metadata = {
@@ -500,19 +500,7 @@ Se travar, é porque `repe cmpsb` envolve várias coisas ao mesmo tempo (flags, 
 
 Você tem agora o vocabulário básico de Assembly x86. No próximo capítulo, vamos olhar a outra ferramenta principal: o C de kernel, que é diferente do C que você já viu. Depois disso, a Parte I termina, e você está pronto pra atacar a Parte II onde a coisa fica visualmente recompensadora. Mas a fundação que esses capítulos de nivelamento estão construindo é o que vai sustentar tudo. Quando o Stage 2 começar a fazer transição de modo no capítulo 6, você vai estar lendo o Assembly como prosa, não como hieróglifo.
 
-<footer className="flex justify-between">
-  <a
-    href="/posts/bootloader-na-pratica/parte-1/2-tooling"
-    className="flex items-center gap-2 hover:cursor-pointer no-underline"
-  >
-    <ArrowLeft />
-    Capítulo anterior
-  </a>
-  <a
-    href=""
-    className="flex items-center gap-2 hover:cursor-pointer no-underline"
-  >
-    Próximo capítulo
-    <ArrowRight />
-  </a>
-</footer>
+<ChapterNav
+  prev="/posts/bootloader-na-pratica/parte-1/2-tooling"
+  next="/posts/bootloader-na-pratica/parte-2/1-real-mode"
+/>

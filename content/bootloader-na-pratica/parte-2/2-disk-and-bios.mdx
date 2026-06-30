@@ -1,0 +1,311 @@
+import If from "@/components/conditional_component.tsx";
+import Testing from "@/components/testing.tsx";
+import DesignNote from "@/components/DesignNote.tsx";
+import { Button } from "@/components/ui/button";
+import Challenge from "@/components/Challenge.tsx";
+import ChapterNav from "@/components/ChapterNav.tsx";
+
+export const metadata = {
+  title: "5. O disco e o BIOS: seu primeiro contrato",
+  description: "O MBR, a assinatura 0xAA55 e os 512 bytes mais importantes da sua vida. O BIOS te entrega a chave do quarto e vai embora.",
+  date: "2026-03-20T12:00:00Z",
+  tags: ["BIOS", "MBR", "Assembly", "Bootloader"],
+};
+
+# O disco e o BIOS: seu primeiro contrato
+
+No começo de *Drácula*, Jonathan Harker chega ao castelo do conde depois de uma viagem longa, escura, cheia de avisos que ele ignora. O cocheiro para diante de um portão imenso, joga as malas no chão, vira o cavalo e parte sem dizer nada. Harker fica ali, sozinho, com a chave que o conde mandou. Ninguém vai voltar. A partir daquele momento, o que acontecer dentro daquelas paredes é problema dele.
+
+O BIOS é o cocheiro. Você é o Harker. E o castelo é o seu computador.
+
+Esse capítulo é sobre o momento em que o BIOS termina o trabalho dele e te entrega o controle. É um momento contratual, com regras claras, e se você quebrar qualquer uma delas, o BIOS vai virar o cavalo e ir embora sem você. Mas se você cumprir o contrato, o que acontece a seguir é todo seu.
+
+No fim, você vai ter escrito seu primeiro boot sector real. 512 bytes. Vai imprimir uma mensagem. Vai rodar no Parede de Carne. E você vai estar oficialmente fazendo um sistema operacional, mesmo que ele saiba fazer só uma coisa.
+
+---
+
+## O que o BIOS faz antes de você
+
+Quando você aperta o botão de ligar, antes da sua linha de código rodar, o processador acorda em Real Mode (você lembra do capítulo 2). Ele começa a executar código a partir de um endereço fixo na ROM, que é onde mora o BIOS. O BIOS então faz uma sequência de coisas que ninguém em sã consciência quer escrever do zero:
+
+Primeiro, o **POST** (Power-On Self-Test). O BIOS verifica se a memória RAM existe e responde, se o teclado está ali, se o disco é detectável. Se algo der errado, ele toca aqueles bipes esquisitos que você ouvia em PCs antigos. Cada padrão de bipe é um código de erro.
+
+Segundo, ele **inicializa hardware**: configura controladores de disco, vídeo, teclado, USB. Cada um desses precisa de uma sequência específica de comandos pra acordar e ficar pronto pra uso.
+
+Terceiro, ele preenche a **IVT** com os endereços das rotinas dele. Lembra que a IVT mora em `0x00000` e que cada interrupção tem 4 bytes lá? O BIOS escreve esses bytes pra que `int 0x10`, `int 0x13` e os outros funcionem.
+
+Quarto, ele procura um **dispositivo de boot**. Geralmente o primeiro disco rígido. Lê o **primeiro setor** (512 bytes) desse disco. Verifica se os dois últimos bytes desse setor são exatamente `0x55` seguido de `0xAA`. Se forem, copia esses 512 bytes pro endereço `0x7C00` da memória, faz um `jmp` pra lá, e some.
+
+Esse é o contrato inteiro. O BIOS lê 512 bytes, copia pra um endereço fixo, pula. Ele não verifica se seu código faz sentido. Ele não te dá ajuda. Ele não volta. Você é o Harker. A chave está na sua mão.
+
+<DesignNote title="Por que 512 bytes?">
+Porque em 1981 os disquetes da época tinham setores de 512 bytes, e era a menor unidade de leitura possível. Ler menos que isso era impossível. Ler mais era arbitrário, então os engenheiros da IBM decidiram: vamos ler exatamente um setor, executar, e deixar o sistema operacional decidir o que fazer depois. Ficou padrão. Hoje seu SSD tem setores de 4096 bytes nativamente, mas a interface ainda finge que tem setores de 512 pra manter compatibilidade. Aquela escolha de 1981 te custa 7/8 de cada setor que você lê.
+</DesignNote>
+
+---
+
+## A assinatura 0xAA55: a senha do clube
+
+A regra mais importante do contrato é a assinatura. Os dois últimos bytes do seu boot sector (bytes 510 e 511, contando do zero) precisam ser:
+
+```
+0x55  0xAA
+```
+
+Note a ordem. O byte 510 é `0x55`, o byte 511 é `0xAA`. Se você ler esses dois bytes como uma palavra de 16 bits no x86 (que é little-endian, ou seja, byte menos significativo primeiro), o valor lido é `0xAA55`. Por isso a literatura fala "assinatura 0xAA55" e o disco fala "55 AA". É a mesma coisa.
+
+Sem essa assinatura, o BIOS olha pro seu setor, pensa "isso aqui não é bootável" e tenta o próximo dispositivo. Pode ser o pen drive, pode ser a rede, pode ser nada. Se nada bootar, ele te mostra aquela tela cinza dizendo "Operating System Not Found" e você fica ali olhando.
+
+Como garantir os bytes certos no lugar certo? O assembler tem diretivas pra isso. No GNU Assembler, você escreve:
+
+```nasm
+.fill 510 - (. - _start), 1, 0
+.word 0xAA55
+```
+
+A linha `.fill` significa: "preencha com bytes zero a quantidade necessária pra que o ponto atual fique exatamente em 510 bytes contando desde `_start`". O `.` é o ponto atual de montagem, `_start` é o início do programa, e `.` menos `_start` é quanto você já escreveu. Então a conta `510 - (. - _start)` te dá o número de bytes faltando até bater 510.
+
+A linha `.word 0xAA55` escreve 2 bytes. Por causa do little-endian, esses 2 bytes saem no disco como `55 AA`. Total: 512 bytes. Os últimos dois corretos. Contrato cumprido.
+
+---
+
+## Imprimindo a primeira mensagem
+
+Vamos construir o boot sector aos poucos. A primeira coisa é o cabeçalho do programa:
+
+```nasm
+.code16
+.globl _start
+.section .text
+_start:
+```
+
+A diretiva `.code16` diz pro assembler: "tudo que vier daqui pra baixo é código de 16 bits". O processador vai estar em Real Mode quando esse código rodar, e precisa receber instruções codificadas pra 16 bits. Sem `.code16`, o assembler iria gerar instruções de 32 ou 64 bits que o processador não entenderia.
+
+`.globl _start` exporta o símbolo `_start` pra ser visível pelo linker. `.section .text` declara que o que vem a seguir é código (a seção `.text` é convencionalmente o código executável).
+
+Depois da declaração, o ritual de abertura:
+
+```nasm
+    xorw %ax, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
+    movw $0x7C00, %sp
+```
+
+As três primeiras linhas zeram `DS`, `ES` e `SS` (você já viu isso no capítulo 2). A quarta coloca `0x7C00` em `SP`, que é o ponteiro de pilha. Isso significa: "minha pilha começa em `0x7C00` e cresce pra baixo". A pilha vai ocupar a memória logo abaixo do nosso boot sector, que está livre. Por que pra baixo? Porque a pilha no x86 cresce em direção a endereços menores, é como a torre de Babel ao contrário, ela empilha pra baixo.
+
+Agora vem o registro do drive de boot:
+
+```nasm
+    movb %dl, boot_drive
+```
+
+Quando o BIOS te entrega o controle, ele coloca em `DL` o número do drive de onde ele leu o boot sector. Geralmente é `0x80` (primeiro disco rígido). A gente salva esse valor numa variável chamada `boot_drive` pra usar mais tarde, quando precisarmos ler mais setores do mesmo disco. Esse é o tipo de coisa que se você esquecer, vai descobrir do pior jeito: o Stage 1 funciona, o Stage 2 carrega na sorte porque o BIOS escolheu o disco certo, e quando você muda de máquina, quebra tudo.
+
+A próxima parte limpa a tela:
+
+```nasm
+    movb $0x00, %ah
+    movb $0x03, %al
+    int $0x10
+```
+
+Aqui a gente usa `int 0x10` (serviços de vídeo) na função `0x00`, que é "trocar modo de vídeo". O modo `0x03` é o modo texto colorido 80x25, que é o modo padrão do PC. Setar o modo de novo, mesmo que ele já esteja nesse modo, tem o efeito colateral de **limpar a tela**. É um truque sujo mas funciona. A tela fica preta, pronta pra você imprimir.
+
+Hora da primeira mensagem:
+
+```nasm
+    movw $msg_boot, %si
+    call print_string
+```
+
+A primeira linha coloca o endereço da string `msg_boot` no registrador `SI`. A segunda chama a função `print_string`, que vamos definir já já. `SI` é onde a função vai esperar receber o ponteiro pra string.
+
+---
+
+## A função print_string
+
+Essa é a função que vai te servir o capítulo inteiro. Ela imprime uma string terminada em zero (estilo C, conhecida como string ASCIIZ). Olha:
+
+```nasm
+print_string:
+    pusha
+1:
+    lodsb
+    orb %al, %al
+    jz 2f
+    movb $0x0E, %ah
+    movb $0, %bh
+    int $0x10
+    jmp 1b
+2:
+    popa
+    ret
+```
+
+`pusha` empilha todos os registradores de uso geral. `popa` desempilha. Isso garante que a função não vaza alterações nos registradores pra quem chamou. É boa educação.
+
+`1:` é uma label local. No GNU Assembler, labels numéricas podem ser referenciadas como `1f` (a próxima label `1` pra frente) ou `1b` (a próxima label `1` pra trás). Isso evita ter que inventar nomes pra todos os loops minúsculos que você escreve.
+
+`lodsb` é a instrução estrela. Ela faz três coisas em uma:
+1. Carrega o byte do endereço `DS:SI` em `AL`.
+2. Incrementa `SI` em 1.
+3. Pronto.
+
+É uma instrução desenhada exatamente pra ler strings byte a byte. Você coloca o ponteiro em `SI`, chama `lodsb` repetidamente, e a cada chamada `AL` recebe o próximo caractere.
+
+`orb %al, %al` faz `AL` OR `AL`, que matematicamente é o próprio `AL`, mas tem o efeito colateral de atualizar a flag de zero. Se `AL` for zero, a flag de zero fica setada. Por que não usar `cmpb $0, %al`? Porque `or` é uma instrução de um byte só com dois operandos curtos, enquanto `cmp` com imediato é maior. Em código que tem que caber em 512 bytes, cada byte conta. É o tipo de otimização que parece exagero até você ver seu boot sector estourar o limite.
+
+`jz 2f` salta pra label `2:` se a flag de zero estiver setada. Em outras palavras, se o byte que acabamos de ler for zero (fim de string), pula pra saída.
+
+Se não for zero, o código segue:
+
+```nasm
+    movb $0x0E, %ah
+    movb $0, %bh
+    int $0x10
+    jmp 1b
+```
+
+`AH = 0x0E` é a função teletype do BIOS: imprime um caractere e avança o cursor. `BH = 0` é o número da página de vídeo (a gente usa só a página zero). `int 0x10` faz a chamada. O caractere que vai ser impresso é o que está em `AL`, que foi colocado lá pelo `lodsb`. `jmp 1b` volta pro começo do loop.
+
+Você acabou de implementar `printf` em 8 linhas de Assembly. Não é elegante, mas é seu.
+
+---
+
+## A imagem completa do Stage 1 mínimo
+
+Vamos juntar tudo. Esse é o Stage 1 mais simples que ainda faz algo visível: ele inicializa o processador, limpa a tela, imprime uma mensagem e trava.
+
+```nasm
+.code16
+.globl _start
+.section .text
+_start:
+    xorw %ax, %ax
+    movw %ax, %ds
+    movw %ax, %es
+    movw %ax, %ss
+    movw $0x7C00, %sp
+
+    movb $0x00, %ah
+    movb $0x03, %al
+    int $0x10
+
+    movw $msg_hello, %si
+    call print_string
+
+halt:
+    cli
+    hlt
+    jmp halt
+
+print_string:
+    pusha
+1:
+    lodsb
+    orb %al, %al
+    jz 2f
+    movb $0x0E, %ah
+    movb $0, %bh
+    int $0x10
+    jmp 1b
+2:
+    popa
+    ret
+
+msg_hello:
+    .asciz "Olá do meu primeiro bootloader!"
+
+.fill 510 - (. - _start), 1, 0
+.word 0xAA55
+```
+
+Trinta e poucas linhas. Faz uma coisa só. Mas faz.
+
+A label `halt` no meio merece atenção. `cli` desabilita interrupções (o processador não vai mais responder a `int` ou interrupções de hardware). `hlt` para o processador até a próxima interrupção, mas como acabamos de desabilitar interrupções, ele fica parado de verdade. `jmp halt` é uma rede de segurança: se por algum motivo o processador acordar (um NMI, por exemplo), ele volta pro `cli` e dorme de novo. É uma trava em três camadas. Pode parecer paranóia, mas em código de boot, você não tem o luxo de "ah, deixa rodar e a gente vê o que acontece".
+
+---
+
+## Compilando e rodando
+
+Pra montar isso no GNU Assembler, você usa:
+
+```bash
+as --32 -o stage1.o stage1.s
+ld -m elf_i386 -Ttext 0x7C00 --oformat=binary -o stage1.bin stage1.o
+```
+
+A primeira linha monta o código de 16 bits (não tem flag específica pra 16 bits no `as`, ele decide pelas diretivas `.code16` no fonte). A segunda linka, dizendo que o código vai rodar a partir do endereço `0x7C00` (`-Ttext 0x7C00`), e que a saída deve ser binário cru sem cabeçalho ELF (`--oformat=binary`).
+
+O resultado é um arquivo `stage1.bin` de exatamente 512 bytes. Você pode confirmar:
+
+```bash
+ls -l stage1.bin
+# Saída esperada: 512
+```
+
+Pra rodar no Parede de Carne, você cola esse arquivo no campo de imagem de boot do emulador. O Parede de Carne vai apresentar isso pra um BIOS virtual, que vai fazer exatamente o que descrevemos: ler 512 bytes, verificar a assinatura, copiar pra `0x7C00` e pular pra lá.
+
+Se tudo deu certo, você vai ver na tela preta a mensagem:
+
+```
+Olá do meu primeiro bootloader!
+```
+
+E só. O programa para. O cursor pisca. Mas você acabou de fazer um sistema operacional. Um bem inútil, mas legítimo.
+
+<DesignNote title="O sentimento do primeiro boot">
+Esse é o momento que todo programador de baixo nível lembra. A primeira vez que um código que você escreveu rodou sem ter sistema operacional embaixo dele, sem runtime, sem nada. Só você, o processador e a memória. Se você não sentiu nada agora, releia o capítulo. Se sentiu, parabéns: você acabou de cruzar uma porta que muita gente que se diz programadora nunca cruza. A maioria do software do mundo roda sobre camadas. Você acabou de tocar o chão.
+</DesignNote>
+
+---
+
+## E se der errado?
+
+A maioria dos erros nessa altura é boba e frustrante. Vou listar os mais comuns:
+
+**A tela fica preta sem mensagem.** Provável: você esqueceu da assinatura `0xAA55`. O BIOS leu seu setor, viu que não era bootável, e foi tentar outro dispositivo. Confira se as duas últimas linhas do código são `.fill ...` e `.word 0xAA55`.
+
+**A máquina reinicia infinitamente.** Provável: seu código tem alguma instrução inválida, ou a pilha não foi inicializada e estourou em cima do código. Confira se você setou `SP` no início.
+
+**A mensagem aparece embaralhada.** Provável: você esqueceu de zerar `DS`, e a string `msg_hello` está sendo lida do lugar errado. O ponteiro em `SI` é offset, e sem `DS = 0`, o endereço efetivo é outro.
+
+**O programa não termina e fica imprimindo lixo.** Provável: faltou o terminador zero na string. A diretiva `.asciz` adiciona automaticamente, mas se você usou `.ascii`, precisa colocar o `\0` na mão.
+
+A partir daqui, debug em código de boot é uma habilidade que se desenvolve com tempo. Ferramentas tradicionais não funcionam. Você não tem `printf` (o que você tem é o que você acabou de escrever). Você não tem GDB rodando contra o processador real, mas tem GDB ligado ao QEMU se quiser. A maior parte do tempo, você descobre o problema relendo o código com olhos novos.
+
+---
+
+## Exercícios
+
+<Challenge level={1}>
+**Warm-up.** Modifique a string `msg_hello` pra mostrar seu nome e o ano. Algo como `"Bootloader do Guilherme - 2026"`. Recompile, rode no Parede de Carne, veja na tela. Esse é seu primeiro toque de propriedade no código.
+</Challenge>
+
+<Challenge level={2}>
+**Prática.** O BIOS, na função `0x0E` da `int 0x10`, ignora o registrador `BL` (que define a cor do caractere) no modo texto comum. Mas existe a função `0x09` da `int 0x10` que respeita cor: ela imprime um caractere com cor específica, mas **não avança o cursor**.
+
+Pesquise a função `0x09` da `int 0x10`. Tente imprimir uma única letra colorida na posição inicial da tela. Você vai precisar setar `BL` com a cor (4 bits de fundo, 4 bits de texto) e `CX` com a quantidade de vezes que o caractere se repete (use 1).
+
+Esse exercício te força a ler especificação do BIOS na unha. Se travar, leia o "Ralf Brown's Interrupt List", que é a bíblia disso.
+</Challenge>
+
+<Challenge level={3}>
+**Desafio.** Modifique seu Stage 1 pra que, depois de imprimir a mensagem, ele leia uma tecla do usuário (use `int 0x16`, função `0x00`) e imprima o caractere pressionado na tela. Quando o usuário pressionar Enter, o programa trava. Qualquer outra tecla é ecoada e a leitura continua.
+
+Você vai ter que pesquisar `int 0x16`, função `0x00`. A função bloqueia até uma tecla ser pressionada e retorna o ASCII em `AL`. Atenção ao limite de 512 bytes: se seu código estourar, você vai ter um erro do linker dizendo que `.fill` recebeu valor negativo. Isso significa que você passou de 510 bytes antes da assinatura. Otimize.
+
+Esse é o tipo de exercício que separa quem leu o capítulo de quem entendeu o capítulo. Se travar, deixa pra depois. Mas tente.
+</Challenge>
+
+---
+
+Você agora tem um boot sector funcional. O BIOS te deu a chave do quarto e foi embora. Você imprimiu sua mensagem e travou. No próximo capítulo, em vez de travar, você vai ensinar seu Stage 1 a fazer a única coisa que ele realmente existe pra fazer: ler mais código do disco e pular pra ele. Porque 512 bytes nunca foram suficientes pra construir nada de verdade, e seu bootloader precisa de espaço pra crescer.
+
+<ChapterNav
+  prev="/posts/bootloader-na-pratica/parte-2/1-real-mode"
+  next="/posts/bootloader-na-pratica/parte-2/3-stage-1"
+/>

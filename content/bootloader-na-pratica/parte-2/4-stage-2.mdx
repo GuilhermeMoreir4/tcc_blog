@@ -1,0 +1,357 @@
+import If from "@/components/conditional_component.tsx";
+import Testing from "@/components/testing.tsx";
+import DesignNote from "@/components/DesignNote.tsx";
+import { Button } from "@/components/ui/button";
+import Challenge from "@/components/Challenge.tsx";
+import ChapterNav from "@/components/ChapterNav.tsx";
+
+export const metadata = {
+  title: "7. Stage 2: Respirando fora dos 512 bytes",
+  description: "Agora com espaço. Aqui o bootloader vira um programa de verdade, com mensagens, organização e respiro pra crescer.",
+  date: "2026-04-03T12:00:00Z",
+  tags: ["Assembly", "Bootloader", "Stage 2"],
+};
+
+# Stage 2: Respirando fora dos 512 bytes
+
+Em _O Senhor das Moscas_, os meninos chegam à ilha vindos de um avião destruído. Os primeiros minutos são de pânico, de procurar um adulto, de checar se ainda estão vivos. Quando se dão conta de que estão sozinhos, sem regras vindas de fora, sem horário pra dormir, sem ninguém pra mandar, o que eles fazem é olhar em volta e tentar entender o quanto de espaço têm. Eles correm a ilha. Acham a praia, a floresta, a montanha. A noção de "isso aqui é nosso, e cabe coisa" muda completamente o que eles pensam ser possível.
+
+O Stage 2 é a sua chegada na ilha. O Stage 1 era o avião destruído: pequeno, frenético, tinha que dar certo na primeira tentativa, sem espaço pra pensar. Agora você tem espaço. Quanto espaço? Quanto você pediu pra ler do disco. Se foram 4 setores, são 2 KB. Se foram 32, são 16 KB. Esse é o seu novo bairro. Você pode imprimir mensagens longas. Pode ter funções organizadas. Pode chamar várias rotinas e voltar. Pode pensar em arquitetura.
+
+Esse capítulo é onde o bootloader começa a parecer um programa de verdade. No fim, você vai ter um Stage 2 que imprime várias mensagens estruturadas, que é uma base sólida pro capítulo 6 (a transição pra Protected Mode) e pro capítulo 7 (a vida no Protected Mode).
+
+---
+
+## A primeira coisa: estabelecer onde você está
+
+Quando o Stage 1 dá `ljmp $0x0000, $0x7E00`, o processador agora está executando código a partir do endereço `0x7E00`. Mas e os registradores de segmento? E a pilha? Em teoria, eles ainda têm os valores que o Stage 1 deixou. Em prática, é boa prática você não confiar e refirmar o que importa.
+
+```nasm
+.code16
+.globl _stage2_entry
+.section .text
+_stage2_entry:
+    movw $msg_stage2, %si
+    call print_string_rm
+```
+
+A diretiva `.code16` está aqui de novo porque, sim, ainda estamos em Real Mode. A diferença com o Stage 1 é só geográfica: o código mora em `0x7E00` em vez de `0x7C00`, mas o ambiente é idêntico.
+
+A label `_stage2_entry` é o ponto de entrada. É pra cá que o Stage 1 saltou. A primeira coisa que a gente faz é imprimir uma mensagem dizendo "cheguei". Isso é cosmético, mas é também debug: se o Stage 1 saltou e a mensagem não aparece, você sabe que o problema está no Stage 2 antes mesmo das primeiras linhas dele rodarem (provavelmente o `ljmp` foi pra um endereço errado).
+
+Note o nome da função: `print_string_rm`. O `_rm` é de Real Mode. A gente vai ter que distinguir das funções de print que vão existir em Protected Mode no capítulo 7. Nomear cedo é nomear bem.
+
+A função em si é idêntica à do Stage 1:
+
+```nasm
+print_string_rm:
+    pusha
+1:
+    lodsb
+    orb %al, %al
+    jz 2f
+    movb $0x0E, %ah
+    movb $0, %bh
+    int $0x10
+    jmp 1b
+2:
+    popa
+    ret
+```
+
+Antes você xingou ter que escrever a mesma função duas vezes. Em uma OS de verdade, você teria uma biblioteca compartilhada. Aqui, no Stage 1 e no Stage 2, são programas separados que rodam em momentos diferentes, e cada um tem que ser autocontido. O Stage 1 não pode chamar funções do Stage 2 porque o Stage 2 ainda não foi carregado quando o Stage 1 está rodando.
+
+Essa duplicação dói menos quando você lembra que cada cópia da função custa 8 instruções, e que os 2 KB do Stage 2 são abundância em comparação aos 512 bytes do Stage 1.
+
+---
+
+## Carregando o kernel
+
+O Stage 2 tem um trabalho secundário antes de começar a fase de Protected Mode: ler o kernel do disco. Nosso kernel vai morar a partir do setor 6 (depois do Stage 1 no setor 1 e dos 4 setores do Stage 2 nos setores 2 a 5), e vai ser carregado num endereço alto da memória, `0x10000`.
+
+Por que `0x10000`? Porque é um endereço acima da região onde o BIOS coloca dados temporários, e porque, na prática, dar 64 KB de espaço pro kernel é uma folga que vai durar bastante.
+
+```nasm
+    movw $msg_loading, %si
+    call print_string_rm
+```
+
+Aviso visual primeiro. O leitor (você, no Parede de Carne) precisa saber que o computador está vivo e fazendo algo. Sem esses prints, se o disco demorar 2 segundos, parece que travou.
+
+```nasm
+    movw $0x1000, %ax
+    movw %ax, %es
+    xorw %bx, %bx
+```
+
+Aqui a gente prepara o endereço de destino. Lembra que o BIOS quer o endereço como `ES:BX`? Pra carregar em `0x10000`, a gente coloca `0x1000` em `ES` e `0` em `BX`. A conta: `0x1000 * 16 + 0 = 0x10000`. Funciona.
+
+```nasm
+    movb $0x02, %ah
+    movb $32, %al
+    movb $0, %ch
+    movb $6, %cl
+    movb $0, %dh
+    movb $0x80, %dl
+    int $0x13
+    jc disk_error_s2
+```
+
+Mesmo padrão da `int 0x13` que você viu no capítulo 4. Mudaram só os números:
+
+- `AL = 32` (32 setores, ou seja, 16 KB).
+- `CL = 6` (começa no sexto setor).
+- `DL = 0x80` (primeiro disco rígido, hardcoded).
+
+Tem um problema aqui que vou apontar de propósito: o `DL = 0x80` está hardcoded. O Stage 1 era cuidadoso: salvava o drive de boot e usava de novo. O Stage 2 está sendo preguiçoso. Se você bootar de outro disco que não seja o `0x80`, esse Stage 2 vai falhar. Em produção, você passaria o drive como parâmetro do Stage 1 pro Stage 2. Pro nosso caso de aprendizado, simplifica.
+
+```nasm
+    xorw %ax, %ax
+    movw %ax, %es
+```
+
+Aqui, depois da leitura, a gente zera `ES` de novo. Por quê? Porque agora os próximos acessos a string vão ser em endereços baixos (as mensagens estão na seção `.text` do nosso Stage 2, perto de `0x7E00`), e a gente não quer que o `lodsb` leia do segmento `0x1000` por engano. Higiene.
+
+---
+
+## A linha A20: o fantasma de 1981
+
+Antes de continuar pra Protected Mode, tem uma coisa esquisita que o Stage 2 precisa fazer. Habilitar a **linha A20**.
+
+Pra entender o que é isso, volta na conta da segmentação que a gente fez no capítulo 2. O maior endereço que você consegue formar com segmento + offset em Real Mode é `0xFFFF * 16 + 0xFFFF = 0x10FFEF`. Isso é um pouquinho mais que 1 MB. Esse pedacinho extra (de `0x100000` a `0x10FFEF`) é chamado de **HMA** (High Memory Area) e existe por acidente da matemática.
+
+Quando a IBM lançou o IBM PC AT em 1984, com o processador 80286 que conseguia endereçar até 16 MB, eles tiveram um problema: programas do PC original assumiam que endereços maiores que 1 MB davam **wrap-around** e voltavam pro começo da memória. A IBM, sendo a IBM, decidiu que compatibilidade era mais sagrada que sanidade, e adicionou um circuito que **forçava o bit 20 do endereço pra zero** quando o processador estava em Real Mode. Esse circuito é controlado por uma linha física chamada A20.
+
+Por padrão, em muitas máquinas modernas, a A20 ainda começa desabilitada (o bit 20 é forçado a zero). Em Real Mode isso não te incomoda, porque você só endereça 1 MB mesmo. Mas quando você entra em Protected Mode e quer usar mais que 1 MB, a A20 desabilitada vira um problema sério: seu acesso a `0x100000` vai ser silenciosamente redirecionado pra `0x000000`, e seu OS vai escrever em cima da IVT.
+
+A solução é habilitar a A20 antes de entrar em Protected Mode. Existem várias formas (algumas envolvem o controlador de teclado, sério, é horrível). A mais simples é via porta `0x92`, conhecida como "Fast A20 Gate":
+
+```nasm
+    inb $0x92, %al
+    testb $0x02, %al
+    jnz a20_done
+    orb $0x02, %al
+    andb $0xFE, %al
+    outb %al, $0x92
+a20_done:
+```
+
+`inb $0x92, %al` lê o byte da porta `0x92` em `AL`. Esse byte controla várias coisas; o bit 1 (`0x02`) é o A20 enable. `testb $0x02, %al` verifica se o bit já está setado. Se sim (`jnz a20_done`), não faz nada e segue. Se não, seta o bit (`orb $0x02, %al`), garante que o bit 0 está zerado (`andb $0xFE, %al`, porque o bit 0 é o "fast reset" e a gente definitivamente não quer dar reset agora), e escreve de volta na porta (`outb %al, $0x92`).
+
+<DesignNote title="A história suja da A20">
+  A primeira forma de habilitar A20 era através do controlador de teclado. Sim,
+  o controlador de **teclado**. Você mandava um comando específico pro chip 8042
+  (o que controla o teclado), ele tinha um pino de saída sobrando, e esse pino
+  estava conectado fisicamente à linha A20 da CPU. Era essa a primeira solução
+  em 1984. Imagina explicar isso pra um arquiteto de chip moderno: "ah, pra usar
+  mais de 1 MB de memória, você manda um comando pro teclado". É ridículo, é
+  absurdo, e foi padrão por décadas. A porta 0x92, que a gente está usando, é
+  uma simplificação posterior. Mas até hoje você encontra código de boot que vai
+  pelo caminho do teclado, porque alguns BIOS não implementam a porta 0x92
+  corretamente.
+</DesignNote>
+
+A mensagem na tela só pra confirmar:
+
+```nasm
+    movw $msg_a20, %si
+    call print_string_rm
+```
+
+---
+
+## Mostrando o estado do sistema
+
+Vamos juntar o Stage 2 inteiro até essa parte. Repare como ele tem espaço pra ser conversador, em contraste com a austeridade do Stage 1:
+
+```nasm
+.code16
+.globl _stage2_entry
+.section .text
+_stage2_entry:
+    movw $msg_stage2, %si
+    call print_string_rm
+
+    movw $msg_loading, %si
+    call print_string_rm
+
+    movw $0x1000, %ax
+    movw %ax, %es
+    xorw %bx, %bx
+    movb $0x02, %ah
+    movb $32, %al
+    movb $0, %ch
+    movb $6, %cl
+    movb $0, %dh
+    movb $0x80, %dl
+    int $0x13
+    jc disk_error_s2
+
+    xorw %ax, %ax
+    movw %ax, %es
+
+    movw $msg_kernel_loaded, %si
+    call print_string_rm
+
+    movw $msg_a20, %si
+    call print_string_rm
+
+    inb $0x92, %al
+    testb $0x02, %al
+    jnz a20_done
+    orb $0x02, %al
+    andb $0xFE, %al
+    outb %al, $0x92
+a20_done:
+
+    # ... aqui no capítulo 6 vamos adicionar a transição pra Protected Mode
+
+print_string_rm:
+    pusha
+1:
+    lodsb
+    orb %al, %al
+    jz 2f
+    movb $0x0E, %ah
+    movb $0, %bh
+    int $0x10
+    jmp 1b
+2:
+    popa
+    ret
+
+disk_error_s2:
+    movw $msg_disk_err_s2, %si
+    call print_string_rm
+    cli
+    hlt
+    jmp disk_error_s2
+
+msg_stage2:
+    .asciz "[BOOT] Stage 2 iniciado (0x7E00)\r\n"
+msg_loading:
+    .asciz "[BOOT] Carregando kernel para 0x10000...\r\n"
+msg_kernel_loaded:
+    .asciz "[BOOT] Kernel carregado (32 setores)\r\n"
+msg_a20:
+    .asciz "[BOOT] A20 line habilitada\r\n"
+msg_disk_err_s2:
+    .asciz "[ERRO] Falha ao carregar kernel!\r\n"
+
+.fill 2048 - (. - _stage2_entry), 1, 0
+```
+
+Compare esse esqueleto com o Stage 1 do capítulo 4. O Stage 1 era denso, cada byte calculado. Esse Stage 2 tem cinco mensagens diferentes, uma função reutilizável, manipulação de portas de I/O, leitura de disco. Tem espaço.
+
+Note também a diretiva `.fill 2048 - (. - _stage2_entry), 1, 0` no final. Diferente do Stage 1, ele não tem assinatura `0xAA55` no fim, porque não precisa: o BIOS não vai validar o Stage 2, ele só foi lido como dado bruto pelo Stage 1. Mas o `.fill` ainda é necessário pra garantir que o arquivo binário tenha exatamente o tamanho que a gente quer (2048 bytes = 4 setores), pra não comer memória além do que pedimos.
+
+---
+
+## Por que terminar aqui?
+
+Esse capítulo termina com o Stage 2 pronto pra entrar em Protected Mode. A gente fez três coisas grandes: chegou em 0x7E00, leu o kernel pro endereço 0x10000, e habilitou a linha A20. Está tudo pronto pra próxima cerimônia.
+
+Por que separar em outro capítulo? Porque a transição pra Protected Mode é o capítulo mais denso desse OA, e ele merece atenção total. Se eu tentasse encaixar a GDT e o `cr0` aqui no fim, ia ser meia atenção pra cada coisa.
+
+Imagina que a gente está num jogo de RPG. O Stage 1 foi a Vila do Iniciante. O Stage 2 é a primeira cidade grande, com NPCs, lojas, alguns side quests. A transição pra Protected Mode é a primeira boss fight séria. E você não enfrenta um boss sem dormir num inn antes.
+
+---
+
+## Quando rodar agora
+
+Você pode (e deve) compilar e rodar o que temos até aqui. Se você fizer:
+
+```bash
+as --32 -o stage1.o stage1.s
+ld -m elf_i386 -Ttext 0x7C00 --oformat=binary -o stage1.bin stage1.o
+
+as --32 -o stage2.o stage2.s
+ld -m elf_i386 -Ttext 0x7E00 --oformat=binary -o stage2.bin stage2.o
+
+cat stage1.bin stage2.bin > disk.img
+truncate -s 1474560 disk.img
+```
+
+E rodar `disk.img` no Parede de Carne, você deve ver:
+
+```
+[BOOT] Stage 1 - Boot sector carregado (0x7C00)
+[BOOT] Stage 2 carregado em 0x7E00, saltando...
+[BOOT] Stage 2 iniciado (0x7E00)
+[BOOT] Carregando kernel para 0x10000...
+[ERRO] Falha ao carregar kernel!
+```
+
+Espera, falhou? Sim. Porque a gente ainda não tem um kernel pra carregar, e os setores 6 a 37 do disco estão vazios. O `int 0x13` provavelmente vai dar carry porque está tentando ler além do fim da imagem. Isso é esperado nessa fase.
+
+Pra contornar, você pode preencher o disco com bytes vazios o suficiente pra que a leitura "funcione" (o BIOS lê zeros, nada acontece). A gente vai resolver isso de verdade no capítulo 7, quando finalmente escrever um kernel mínimo.
+
+Por enquanto, você pode comentar o bloco da `int 0x13` temporariamente pra testar só o fluxo do Stage 2 sem carregar nada:
+
+```nasm
+    # Comentado temporariamente
+    # movb $0x02, %ah
+    # movb $32, %al
+    # ...
+    # int $0x13
+    # jc disk_error_s2
+```
+
+Com isso comentado, você deve ver as mensagens todas até "A20 line habilitada", e depois o programa cai no que vem depois (que ainda não existe, então provavelmente vai quebrar). Essa é a base que a gente vai construir em cima nos próximos capítulos.
+
+---
+
+## O que você acabou de aprender
+
+Esse capítulo, mais que ensinar truques novos, ensinou um padrão: **o Stage 2 é onde o trabalho é estruturado**. Você não escreve toda a lógica de boot dentro do Stage 1 porque não cabe. Você desenha o Stage 1 pra ser o mínimo possível pra trazer o Stage 2 vivo, e depois faz no Stage 2 tudo que precisa de espaço.
+
+Esse padrão se repete em sistemas operacionais reais. O GRUB tem stages 1, 1.5 e 2. O Linux tem o boot loader, depois um initrd, depois o kernel propriamente dito. Cada um carrega o próximo, cada um cresce em complexidade, cada um tem espaço progressivamente maior.
+
+Você não precisa achar isso natural agora. Vai ser natural depois que você fizer alguns deles.
+
+---
+
+## Exercícios
+
+<Challenge level={1}>
+**Warm-up.** Adicione uma sexta mensagem no Stage 2 que imprima algo personalizado, como `"[BOOT] Aqui é o SeldonOS de Guilherme"`. Coloque ela depois da mensagem de A20 habilitada. Recompile, rode no Parede de Carne, veja a sequência de mensagens.
+
+Esse exercício é pra você ver como adicionar coisa no Stage 2 é trivial agora. É a diferença entre escrever em uma página de caderno versus escrever no verso de um cartão de visita.
+
+</Challenge>
+
+<Challenge level={2}>
+**Prática.** O Stage 2 atual usa `DL = 0x80` hardcoded pra ler o kernel. Modifique pra que o Stage 1 passe o valor de `boot_drive` pro Stage 2 através de uma variável fixa na memória (por exemplo, em `0x7B00`, que é abaixo do Stage 1 e sem uso por ninguém). O Stage 1 escreve, o Stage 2 lê.
+
+Você vai precisar:
+
+1. No Stage 1, depois de salvar `boot_drive`, copiar esse byte pra `0x7B00`: `movb boot_drive, %al; movw $0x7B00, %bx; movb %al, (%bx)`.
+2. No Stage 2, antes da `int 0x13` que carrega o kernel, ler de `0x7B00`: `movw $0x7B00, %bx; movb (%bx), %dl`.
+
+É pouco código mas te ensina um padrão importante: **passar dados entre estágios via memória compartilhada**. Sistemas operacionais reais fazem isso o tempo todo entre bootloader e kernel.
+
+</Challenge>
+
+<Challenge level={3}>
+**Desafio.** Implemente uma função `print_hex_word_rm` no Stage 2 que recebe um valor de 16 bits em `AX` e imprime os 4 dígitos hexadecimais. Depois use ela pra imprimir, ao final do Stage 2, o valor de cada um dos quatro registradores de segmento (`CS`, `DS`, `ES`, `SS`).
+
+A saída esperada seria algo como:
+
+```
+CS=0000 DS=0000 ES=0000 SS=0000
+```
+
+Pra ler `CS`, você precisa fazer: `movw %cs, %ax`. Igual pros outros. Depois imprime o nome do registrador, depois o valor.
+
+Esse exercício é uma forma de "sentir" o estado do processador. Antes de entrar em Protected Mode no próximo capítulo, é instrutivo ver os registradores do Real Mode bem na cara, pra depois comparar como eles ficam diferentes lá. Se travar, comece pelo `print_hex_word` (você já tem `print_hex_digit` do capítulo 2, só precisa chamar 4 vezes com shifts e máscaras), depois faça os prints separados.
+
+</Challenge>
+
+---
+
+Você agora tem um Stage 2 funcional que estabelece um lar maior na memória e prepara o terreno. No próximo capítulo, você vai fazer a coisa mais cerimoniosa que existe em x86: convencer o processador a sair de Real Mode e entrar em Protected Mode. Se o Stage 2 foi a chegada na ilha em _O Senhor das Moscas_, o capítulo 6 é o momento em que a gente percebe que a ilha tem regras próprias e a gente vai ter que aprender a viver nelas. Vai ser denso. Mas se você sobreviver à GDT, o resto é descida.
+
+<ChapterNav
+  prev="/posts/bootloader-na-pratica/parte-2/3-stage-1"
+  next="/posts/bootloader-na-pratica/parte-2/5-protect-mode"
+/>

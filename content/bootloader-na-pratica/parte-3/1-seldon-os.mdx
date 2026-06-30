@@ -1,0 +1,475 @@
+import If from "@/components/conditional_component.tsx";
+import Testing from "@/components/testing.tsx";
+import DesignNote from "@/components/DesignNote.tsx";
+import { Button } from "@/components/ui/button";
+import Challenge from "@/components/Challenge.tsx";
+import ChapterNav from "@/components/ChapterNav.tsx";
+
+export const metadata = {
+  title: "9. Vida no Protected Mode",
+  description:
+    "Sem BIOS, sem int 0x10. Aprenda a escrever direto no VGA text buffer, e descubra que Protected Mode te dá poder mas tira as rodinhas.",
+  date: "2026-04-17T12:00:00Z",
+  tags: ["C", "Protected Mode", "VGA", "Kernel"],
+};
+
+# Vida no Protected Mode
+
+Em _Trono de Vidro_, lá no segundo livro, Celaena passa um tempo escondida fingindo ser outra pessoa. Vive sob disfarce, depende da bondade dos outros, segue as regras de uma corte que não é dela. No momento em que ela aceita quem realmente é, perde a proteção do disfarce. As pessoas começam a esperar coisas dela. As regras antigas não se aplicam. Mas em troca, ela pode finalmente fazer o que tinha que fazer desde o início, sem pedir permissão. É a soma zero do crescimento: você ganha autonomia, perde os apoios.
+
+O Protected Mode é a sua perda de disfarce. Você cresceu. Ninguém vai te ajudar mais. O BIOS, que era seu mordomo nos capítulos anteriores, virou um rumor de outro mundo. Você quer imprimir um caractere na tela? Escreve direto na memória. Quer ler o teclado? Implementa o driver. Quer ler o disco? Vira a documentação do controlador IDE.
+
+Esse capítulo é sobre essa vida nova. A gente vai escrever um kernel mínimo em C, vai escrever a primeira função `print` que escreve direto na memória de vídeo, e vai ver "Hello from Protected Mode" aparecer na tela vindo do código que **não passou** pelo BIOS. É pequeno. Mas é seu, e roda na sua casa.
+
+No fim, você vai ter feito a primeira parte que **parece** um sistema operacional, e não mais um exercício de Assembly.
+
+---
+
+## O que sobrou do BIOS
+
+Vamos fazer o luto rápido. Em Real Mode, o BIOS te dava de graça:
+
+- Print de caracteres com `int 0x10`.
+- Leitura de disco com `int 0x13`.
+- Leitura de teclado com `int 0x16`.
+- Reboot, beep, get time, mil outras coisas.
+
+Em Protected Mode, **nada disso funciona**. As rotinas do BIOS são código de 16 bits. Estão na memória, mas o processador agora interpreta tudo como 32 bits. Tentar fazer `int 0x10` de Protected Mode é convite pra exception.
+
+Mas você não está completamente sozinho. Você ainda tem:
+
+- **Memória mapeada de hardware**: tela, registradores de placa de vídeo, controladores de I/O. Tudo acessível por endereço.
+- **Portas de I/O**: a instrução `in` e `out` continuam funcionando e te dão acesso direto a controladores.
+- **Toda a memória**: 4 GB endereçáveis. Pode escrever onde quiser (se o segmento permitir).
+
+A diferença é que agora você precisa **saber onde** as coisas estão. Não tem mais um cardápio de funções. Tem hardware nu na sua frente.
+
+---
+
+## A memória de vídeo, segunda visita
+
+Você já viu `0xB8000` no capítulo 6. Vamos olhar com mais atenção.
+
+A memória de texto da VGA cobre `0xB8000` até `0xBFFFF` (32 KB). Em modo texto 80x25, a tela visível ocupa apenas:
+
+```
+80 colunas * 25 linhas * 2 bytes/caractere = 4000 bytes
+```
+
+Esses 4000 bytes ficam de `0xB8000` a `0xB8FA0`. Cada par de bytes é um caractere visível na tela:
+
+```
+Offset  Conteúdo                       Posição na tela
+─────   ───────────                    ─────────────────
+0       'H' (0x48), atributo (0x07)    Linha 0, coluna 0
+2       'i' (0x69), atributo (0x07)    Linha 0, coluna 1
+4       ' ' (0x20), atributo (0x07)    Linha 0, coluna 2
+...
+160     ?                              Linha 1, coluna 0
+```
+
+Cada linha tem 80 caracteres, então cada linha ocupa `80 * 2 = 160 bytes`. Pra ir pra linha N, você soma `N * 160` ao endereço base. Pra ir pra coluna C dentro da linha, soma `C * 2`.
+
+A fórmula geral pro endereço de qualquer caractere:
+
+```
+endereço = 0xB8000 + (linha * 160) + (coluna * 2)
+```
+
+Decora isso. Vai usar pelo resto da vida.
+
+---
+
+## O byte de atributo: cor de texto e fundo
+
+O segundo byte de cada caractere é o atributo. Em binário, ele é dividido em:
+
+```
+Bits  7  6  5  4  3  2  1  0
+      ─  ─────  ─  ─────────
+      B  BG     I  FG
+```
+
+- **Bits 0-2**: cor de texto (FG, foreground).
+- **Bit 3**: intensidade (I), torna a cor de texto mais brilhante.
+- **Bits 4-6**: cor de fundo (BG, background).
+- **Bit 7**: pisca (B, blink). Em alguns BIOS pisca o texto, em outros é usado como bit de intensidade do fundo.
+
+As 8 cores básicas são:
+
+```
+0 - Preto       1 - Azul        2 - Verde       3 - Ciano
+4 - Vermelho    5 - Magenta     6 - Marrom      7 - Cinza claro
+```
+
+Com o bit de intensidade ligado, viram:
+
+```
+8 - Cinza escuro    9 - Azul claro      A - Verde claro    B - Ciano claro
+C - Vermelho claro  D - Magenta claro   E - Amarelo        F - Branco
+```
+
+Então o atributo `0x0F` é texto branco brilhante sobre fundo preto. `0x07` é cinza claro sobre preto (o "padrão" do DOS). `0x4F` é texto branco sobre fundo vermelho (que você vai usar pra mensagens de erro). `0x2A` é texto verde claro sobre fundo verde (não use isso, vira invisível, é piada de programador).
+
+---
+
+## Saindo do Assembly puro: o kernel em C
+
+Aqui vem uma transição grande. Até agora, tudo foi Assembly. Mas Assembly puro pra escrever um kernel inteiro é masoquismo. A partir do kernel, a gente vai usar **C**, com pequenos pedacinhos de Assembly (inline ou em arquivos separados) pra coisas que C não consegue fazer.
+
+Por que C? Porque C é a linguagem desenhada pra escrever sistemas operacionais. Ela mapeia quase 1-pra-1 com Assembly (cada construção de C tem uma forma óbvia de virar Assembly), mas te dá funções, structs, controle de fluxo legível, e pode acessar memória direta com ponteiros.
+
+A primeira coisa é configurar o compilador. A gente vai usar o GCC, mas configurado pra **freestanding**, que é o modo "sem biblioteca padrão" (não tem `printf`, não tem `malloc`, não tem nada da libc).
+
+A flag mágica é `-ffreestanding`. Junto com ela, vamos usar `-m32` pra forçar 32 bits, `-fno-pie` pra desabilitar position-independent code (não precisamos disso em kernel), e `-nostdlib` pra dizer pro linker que não vai ter biblioteca padrão.
+
+```bash
+gcc -ffreestanding -m32 -fno-pie -nostdlib -c kernel.c -o kernel.o
+```
+
+E pra linkar:
+
+```bash
+ld -m elf_i386 -Ttext 0x10000 --oformat=binary -o kernel.bin kernel.o
+```
+
+`-Ttext 0x10000` diz ao linker que o código vai ser carregado a partir do endereço `0x10000`, que é onde nosso Stage 2 colocou os bytes lidos do disco. Sem isso, o código teria endereços relativos errados.
+
+---
+
+## O kernel mínimo absoluto
+
+Esse é o kernel mais simples possível. Ele só imprime uma mensagem na tela e trava.
+
+```c
+// kernel.c
+#define VGA_BUFFER ((volatile unsigned short*) 0xB8000)
+#define VGA_COLOR_GREEN_ON_BLACK 0x0A
+
+void kmain(void) {
+    const char* msg = "Hello from Protected Mode!";
+    int offset = 8 * 80;  // Linha 8, coluna 0
+
+    for (int i = 0; msg[i] != '\0'; i++) {
+        unsigned short value = (VGA_COLOR_GREEN_ON_BLACK << 8) | msg[i];
+        VGA_BUFFER[offset + i] = value;
+    }
+
+    while (1) {
+        __asm__ __volatile__("hlt");
+    }
+}
+```
+
+Vamos dissecar.
+
+```c
+#define VGA_BUFFER ((volatile unsigned short*) 0xB8000)
+```
+
+Define um ponteiro pra `0xB8000` tratado como array de `unsigned short` (16 bits cada, perfeito pro nosso par caractere+atributo). O `volatile` é importante: diz pro compilador que essa memória pode mudar a qualquer momento (porque é hardware), e que ele não deve otimizar leituras/escritas. Sem `volatile`, o compilador poderia decidir cachear o valor em registrador e suas escritas iam ser perdidas.
+
+```c
+#define VGA_COLOR_GREEN_ON_BLACK 0x0A
+```
+
+Atributo: verde brilhante sobre preto.
+
+```c
+void kmain(void) {
+```
+
+A função principal do kernel. O nome `kmain` é convenção; pode ser qualquer um, contanto que o linker saiba o ponto de entrada. Como nosso Stage 2 fez `call *%eax` com `EAX = 0x10000`, e o kernel foi linkado começando em `0x10000`, a primeira função do arquivo (na ordem do código) acaba sendo a chamada. Pra ser explícito, dá pra usar a flag `-e kmain` no linker, mas pro nosso caso simples, basta colocar `kmain` no topo do arquivo.
+
+```c
+const char* msg = "Hello from Protected Mode!";
+int offset = 8 * 80;
+```
+
+Define a string e a posição inicial. Linha 8 (oitava linha de cima pra baixo) coluna 0. O offset é em **shorts**, não em bytes, porque `VGA_BUFFER` é `unsigned short*`.
+
+```c
+for (int i = 0; msg[i] != '\0'; i++) {
+    unsigned short value = (VGA_COLOR_GREEN_ON_BLACK << 8) | msg[i];
+    VGA_BUFFER[offset + i] = value;
+}
+```
+
+Loop padrão. Pra cada caractere da string até o terminador nulo:
+
+- Constrói um `unsigned short` com o atributo nos bits altos e o caractere nos bits baixos.
+- Escreve nessa posição da memória de vídeo.
+
+A escrita `VGA_BUFFER[offset + i] = value` é compilada como uma única instrução `mov` que escreve 2 bytes em memória. Por causa do `volatile`, o compilador não tenta otimizar.
+
+```c
+while (1) {
+    __asm__ __volatile__("hlt");
+}
+```
+
+Loop infinito que dorme. `hlt` é a instrução que para o processador até a próxima interrupção. Como a gente nem configurou interrupções ainda (vai ser num capítulo futuro), o processador fica parado pra sempre. Em termos de consumo de energia, isso é melhor que um `while(1)` puro, que deixa o processador girando inutilmente.
+
+`__asm__ __volatile__` é a sintaxe de inline assembly do GCC. O `volatile` aqui significa "não otimize, não mova essa instrução de lugar".
+
+---
+
+## O linker script: dizendo onde tudo mora
+
+Pra organizar onde cada parte do kernel vai parar na memória, é boa prática usar um **linker script**. Pro nosso caso, simples assim:
+
+```ld
+/* kernel.ld */
+ENTRY(kmain)
+
+SECTIONS
+{
+    . = 0x10000;
+
+    .text : {
+        *(.text)
+    }
+
+    .rodata : {
+        *(.rodata)
+    }
+
+    .data : {
+        *(.data)
+    }
+
+    .bss : {
+        *(.bss)
+    }
+}
+```
+
+`ENTRY(kmain)` define o ponto de entrada como a função `kmain`. `. = 0x10000` define que o código começa nesse endereço. Depois listam as seções na ordem: `.text` (código), `.rodata` (constantes só de leitura, como nossa string), `.data` (variáveis inicializadas), `.bss` (variáveis não inicializadas).
+
+Pra usar o linker script:
+
+```bash
+ld -m elf_i386 -T kernel.ld --oformat=binary -o kernel.bin kernel.o
+```
+
+A flag `-T kernel.ld` substitui o linker script padrão do `ld` pelo nosso.
+
+---
+
+## Uma função print mais decente
+
+A versão acima é didática mas crua. Vamos refatorar pra uma função `print_at` que pode ser chamada várias vezes:
+
+```c
+#define VGA_BUFFER ((volatile unsigned short*) 0xB8000)
+#define VGA_WIDTH 80
+#define VGA_HEIGHT 25
+
+#define COLOR(fg, bg) (((bg) << 4) | (fg))
+#define ENTRY(c, attr) (((unsigned short)(attr) << 8) | (unsigned char)(c))
+
+void print_at(int row, int col, const char* str, unsigned char attr) {
+    int offset = row * VGA_WIDTH + col;
+    for (int i = 0; str[i] != '\0'; i++) {
+        VGA_BUFFER[offset + i] = ENTRY(str[i], attr);
+    }
+}
+```
+
+Os macros `COLOR` e `ENTRY` deixam o código mais legível. `COLOR(verde, preto)` calcula o byte de atributo. `ENTRY(caractere, atributo)` constrói o short da memória de vídeo.
+
+Agora o `kmain` fica:
+
+```c
+void kmain(void) {
+    print_at(5, 10, "SeldonOS", COLOR(0x0F, 0x00));
+    print_at(7, 10, "Hello from Protected Mode!", COLOR(0x0A, 0x00));
+    print_at(9, 10, "Kernel rodando em 0x10000", COLOR(0x07, 0x00));
+
+    while (1) {
+        __asm__ __volatile__("hlt");
+    }
+}
+```
+
+Três mensagens, três cores diferentes, três linhas. O kernel agora tem cara de programa.
+
+---
+
+## Limpando a tela
+
+Antes do `print_at`, a tela tem as mensagens vindas do Real Mode (do BIOS) e do início do Protected Mode (do Stage 2). Pra dar uma sensação de "novo mundo", a primeira coisa do kernel deveria ser limpar a tela.
+
+```c
+void clear_screen(unsigned char attr) {
+    for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT; i++) {
+        VGA_BUFFER[i] = ENTRY(' ', attr);
+    }
+}
+```
+
+Itera pelos 2000 caracteres (80 \* 25), escrevendo espaço com o atributo dado. Atributo `0x07` (cinza claro sobre preto) é o padrão do DOS e dá uma sensação familiar.
+
+Atualizando o `kmain`:
+
+```c
+void kmain(void) {
+    clear_screen(0x07);
+
+    print_at(5, 28, "Bem-vindo ao SeldonOS", COLOR(0x0F, 0x00));
+    print_at(7, 25, "Hello from Protected Mode!", COLOR(0x0A, 0x00));
+    print_at(9, 26, "Kernel rodando em 0x10000", COLOR(0x07, 0x00));
+
+    while (1) {
+        __asm__ __volatile__("hlt");
+    }
+}
+```
+
+Repare que ajustei as colunas (`28`, `25`, `26`) pra ficar mais ou menos centralizado. A tela tem 80 colunas. Texto de 25 caracteres fica centralizado em torno da coluna `(80 - 25) / 2 = 27`. Estética é detalhe, mas detalhe importa quando você está apresentando seu OS pra alguém.
+
+---
+
+## Compilando e rodando o kernel
+
+Vamos juntar tudo. A pipeline completa:
+
+```bash
+# Stage 1
+as --32 -o stage1.o stage1.s
+ld -m elf_i386 -Ttext 0x7C00 --oformat=binary -o stage1.bin stage1.o
+
+# Stage 2
+as --32 -o stage2.o stage2.s
+ld -m elf_i386 -Ttext 0x7E00 --oformat=binary -o stage2.bin stage2.o
+
+# Kernel
+gcc -ffreestanding -m32 -fno-pie -nostdlib -c kernel.c -o kernel.o
+ld -m elf_i386 -T kernel.ld --oformat=binary -o kernel.bin kernel.o
+
+# Imagem de disco
+cat stage1.bin stage2.bin kernel.bin > disk.img
+truncate -s 1474560 disk.img
+```
+
+Cada arquivo binário tem um endereço de origem específico (`0x7C00`, `0x7E00`, `0x10000`), e a posição no disco é decidida pelo `cat` (Stage 1 nos primeiros 512 bytes, Stage 2 nos próximos 2048, kernel depois disso).
+
+Quando você rodar `disk.img` no Parede de Carne, deve ver:
+
+```
+[Mensagens do Stage 1 e Stage 2 em Real Mode]
+[Mensagem verde do Stage 2 em Protected Mode]
+```
+
+E depois a tela inteira limpa, com:
+
+```
+                            Bem-vindo ao SeldonOS
+
+                         Hello from Protected Mode!
+
+                          Kernel rodando em 0x10000
+```
+
+Em três cores diferentes. Sem BIOS. Sem `int 0x10`. Tudo escrito por código que **você** escreveu, em endereço de memória que **você** escolheu.
+
+<DesignNote title="A relação custo-benefício do Protected Mode">
+Em Real Mode, imprimir uma string custava: 2 instruções pra setar AH/BH, uma `int 0x10` por caractere, retornar. O BIOS fazia tudo. Você escrevia pouco código mas cada print era lento (interrupção, mudança de contexto, código do BIOS interpretando).
+
+Em Protected Mode, imprimir uma string custa: cálculo de offset, escrita direta na memória de vídeo. Sem interrupções. Sem BIOS. **Mil vezes mais rápido**, literalmente.
+
+E é por isso que sistemas operacionais modernos abandonam o BIOS. Não é só pelo poder de 32 bits ou pelo endereçamento. É pela velocidade. Você não consegue fazer um sistema operacional usável chamando o BIOS pra cada operação.
+
+</DesignNote>
+
+---
+
+## Curiosidade: por que o cursor não pisca?
+
+Você provavelmente notou que, depois do kernel rodar, não tem cursor piscando na tela. O cursor do VGA text mode é controlado por dois registradores no controlador da placa de vídeo, acessíveis pelas portas `0x3D4` e `0x3D5`. Em Real Mode, o BIOS atualiza esses registradores quando você usa `int 0x10`. Em Protected Mode, ninguém faz isso por você.
+
+Pra "esconder" o cursor (já que ele não vai pra lugar nenhum sem você atualizar), você pode posicionar ele fora da tela visível. Algo assim:
+
+```c
+void hide_cursor(void) {
+    __asm__ __volatile__(
+        "mov $0x3D4, %dx\n"
+        "mov $0x0A, %al\n"
+        "out %al, %dx\n"
+        "mov $0x3D5, %dx\n"
+        "mov $0x20, %al\n"
+        "out %al, %dx\n"
+    );
+}
+```
+
+Esse trecho usa inline assembly pra mandar comandos pro controlador da VGA. Os detalhes dos registradores `0x0A` e `0x20` são da especificação da VGA (a Cursor Start Register, com bit 5 setado, desabilita o cursor). Não vou aprofundar agora, mas vale saber que tem como.
+
+---
+
+## A jornada até aqui
+
+Pare. Olha pra trás. Capítulo 2: você nem sabia o que era Real Mode. Capítulo 3: imprimiu sua primeira mensagem com 32 linhas de código. Capítulo 4: leu setores do disco. Capítulo 5: organizou um Stage 2. Capítulo 6: fez o ritual da GDT.
+
+E agora, capítulo 7: você está rodando um kernel em C que faz I/O sem ajuda nenhuma.
+
+Você passou de "não sei o que é segmento" pra "implementei um sistema operacional que carrega sozinho, transita de modo, e roda código de 32 bits". Isso não é trivial. A maioria dos programadores que se chamam programadores nunca chegou perto do que você fez nesses capítulos. Você cruzou a porta.
+
+Mas o sistema operacional que você tem agora **só imprime mensagens**. Pra ser um SO de verdade, precisa lidar com interrupções, gerenciar memória, ter um shell, ler teclado, escrever em disco. Cada um desses é um capítulo (ou vários). O SeldonOS é uma jornada que continua. Mas a fundação está pronta.
+
+---
+
+## Exercícios
+
+<Challenge level={1}>
+  **Warm-up.** Modifique o `kmain` pra imprimir seu nome, o ano, e uma mensagem
+  motivacional em três linhas diferentes. Use cores que combinem (sugiro um azul
+  claro, um amarelo e um branco). Recompile o kernel, gere o disco, rode no
+  Parede de Carne. Tire um screenshot pra você lembrar desse momento.
+</Challenge>
+
+<Challenge level={2}>
+**Prática.** Implemente uma função `print_int` que imprime um número decimal em uma posição da tela. Assinatura:
+
+```c
+void print_int(int row, int col, int value, unsigned char attr);
+```
+
+Você precisa converter um inteiro (digamos, 12345) na string "12345" e imprimir. Os passos:
+
+1. Lidar com o caso especial de `value == 0` (imprimir "0" e sair).
+2. Lidar com negativos: se `value < 0`, imprimir `-` e usar `-value` daí em diante.
+3. Para extrair os dígitos, dividir por 10 sucessivamente. Cada resto é um dígito (de trás pra frente).
+4. Inverter os dígitos pra imprimir na ordem certa.
+
+Use isso pra imprimir o resultado de algo divertido no kernel, tipo `print_int(15, 30, 42 * 7, 0x0E)`. Verifique se aparece "294" na tela.
+
+</Challenge>
+
+<Challenge level={3}>
+**Desafio.** Modifique seu `kmain` pra desenhar uma **borda** ao redor da tela inteira, usando caracteres de "box drawing" do code page 437 (a fonte do VGA text mode tem esses caracteres). Os caracteres que você quer:
+
+- `0xC9` (`╔`): canto superior esquerdo
+- `0xBB` (`╗`): canto superior direito
+- `0xC8` (`╚`): canto inferior esquerdo
+- `0xBC` (`╝`): canto inferior direito
+- `0xCD` (`═`): linha horizontal
+- `0xBA` (`║`): linha vertical
+
+Você vai precisar:
+
+1. Desenhar a linha de cima (cantos + horizontais).
+2. Desenhar as laterais (verticais nas colunas 0 e 79).
+3. Desenhar a linha de baixo.
+
+Depois imprima as mensagens dentro da borda, ajustando coordenadas pra não sobrepor.
+
+Esse exercício é só puxado por causa do volume de código (você vai escrever 4-5 funções pequenas). Mas o resultado é o primeiro vislumbre de "interface gráfica" do seu OS, e é gostoso de ver. Se travar, comece pelos cantos, depois as linhas, depois junta. Não tente fazer tudo numa função só.
+
+</Challenge>
+
+---
+
+Você agora vive em Protected Mode. Tem um kernel em C que escreve direto na tela. Saiu do reino do BIOS. O SeldonOS é um sistema operacional que carrega, transita, e mostra cara própria. A fundação que você construiu nesses sete capítulos é a mesma fundação de qualquer sistema operacional sério. O que vem a seguir é mais história, mais subsistemas, mais profundidade. Mas tudo descansa em cima do que você acabou de fazer.
+
+<ChapterNav prev="/posts/bootloader-na-pratica/parte-2/5-protect-mode" />
