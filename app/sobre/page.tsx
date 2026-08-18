@@ -153,7 +153,7 @@ export default function SobrePage() {
             transition={{ type: "spring", stiffness: 400, damping: 20 }}
           >
             <Link
-              href="/posts/bootloader-na-pratica/parte-1/introduction"
+              href="/posts/bootloader-na-pratica/parte-1/1-introduction"
               className="inline-flex items-center gap-2 px-4 py-2 rounded-md bg-moss text-ethereal font-medium hover:opacity-90 transition-opacity"
             >
               <BookOpen className="w-4 h-4" />
@@ -167,7 +167,7 @@ export default function SobrePage() {
             transition={{ type: "spring", stiffness: 400, damping: 20 }}
           >
             <a
-              href="https://github.com/GuilhermeMoreir4/Implementation-TCC"
+              href="https://github.com/GuilhermeMoreir4/BootloaderProject"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-4 py-2 rounded-md border border-moss text-ethereal font-medium hover:opacity-90 transition-opacity"

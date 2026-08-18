@@ -44,7 +44,7 @@ export default function HeroSection() {
           transition={{ type: "spring", stiffness: 400, damping: 20 }}
         >
           <Link
-            href="/posts/bootloader-na-pratica/parte-1/introduction"
+            href="/posts/bootloader-na-pratica/parte-1/1-introduction"
             className="text-xl inline-flex items-center gap-3 p-2 px-4 rounded-md bg-moss hover:opacity-90 transition-opacity"
           >
             <BookOpen /> Começar a Ler

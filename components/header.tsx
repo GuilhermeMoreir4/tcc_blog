@@ -37,7 +37,7 @@ export default function Header() {
             </li>
             <li>
               <motion.a
-                href="https://github.com/GuilhermeMoreir4/Implementation-TCC"
+                href="https://github.com/GuilhermeMoreir4/BootloaderProject"
                 target="_blank"
                 rel="noopener noreferrer"
                 whileHover={{ scale: 1.1, rotate: 5 }}
