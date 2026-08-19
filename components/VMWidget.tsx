@@ -94,8 +94,8 @@ type PanelState = { x: number; y: number; w: number; h: number };
 function defaultPanelState(iconX: number, iconY: number): PanelState {
   const vw = window.innerWidth;
   const vh = window.innerHeight;
-  const w = Math.min(700, vw - 16);
-  const h = Math.min(460, vh - TITLE_H - 16);
+  const w = Math.min(900, vw - 32);
+  const h = Math.min(620, vh - TITLE_H - 32);
 
   const spaceRight = vw - (iconX + ICON_SIZE);
   const x =
@@ -132,6 +132,28 @@ export default function VMWidget() {
   const initialized = useRef(false);
   const serialBuf = useRef("");
   const progressTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const nativeSize = useRef<{ w: number; h: number } | null>(null);
+
+  // Fit the emulator's screen (canvas/text layer) to the container, no scroll
+  const applyScreenScale = useCallback(() => {
+    const size = nativeSize.current;
+    const container = screenRef.current;
+    if (!size || !container || !window.vmEmulator?.screen_set_scale) return;
+    const containerW = container.clientWidth;
+    const containerH = container.clientHeight;
+    if (!size.w || !size.h || !containerW || !containerH) return;
+    const scale = Math.min(containerW / size.w, containerH / size.h);
+    window.vmEmulator.screen_set_scale(scale, scale);
+  }, []);
+
+  // Recompute the scale whenever the terminal's screen container is resized
+  useEffect(() => {
+    const container = screenRef.current;
+    if (!container) return;
+    const observer = new ResizeObserver(() => applyScreenScale());
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [applyScreenScale]);
 
   // Init positions
   useEffect(() => {
@@ -251,6 +273,14 @@ export default function VMWidget() {
       }
 
       window.vmEmulator = new window.V86(options);
+
+      window.vmEmulator.add_listener(
+        "screen-set-size",
+        (size: [number, number, number]) => {
+          nativeSize.current = { w: size[0], h: size[1] };
+          applyScreenScale();
+        },
+      );
 
       window.vmEmulator.add_listener("emulator-ready", () => {
         if (progressTimer.current) {
@@ -568,7 +598,7 @@ export default function VMWidget() {
             flex: 1,
             height: panel.h,
             background: "#000",
-            overflow: "auto",
+            overflow: "hidden",
             borderRadius: "0 0 8px 8px",
           }}
         >
